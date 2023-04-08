@@ -1,143 +1,201 @@
-use std::{marker::PhantomData, any::Any};
+use std::sync::{Arc, Mutex};
 
-pub struct Subject {
-    subscriber: Option<Box<dyn Any>>, // Option<T> maybe
-}
+use rxr::*;
 
-impl Subject {
-    pub fn foo<N: 'static>(self) {
-        // // // if let Some(s) = self.subscriber.downcast_ref::<Subscriber<N>>() {
-        
-       // }
-    }
-}
+use tokio::sync::mpsc::channel;
+use tokio::time::{sleep, Duration};
+use tokio::task;
 
-pub trait Observer<T> {
-   fn next(&mut self, v: T); 
-}
+#[tokio::main]
+async fn main() {
+   let o = Subscriber::new(|v| {
+       println!("----- {}", v);
+   }, Some(|| { println!("Completed .................") })
+);
+    
+    let s = Observable::new(|mut o: Subscriber<_>| {
+        let done = Arc::new(Mutex::new(false));
+        let done_c = Arc::clone(&done);
+        let (tx, mut rx) = channel(10);
 
-pub struct Obs<T> {
-        next_fn: Box<dyn FnMut(T)>,
-}   
-
-impl<T> Observer<T> for Obs<T> {
-    fn next(&mut self, v: T) {
-            (self.next_fn)(v);
-    }
-}
-
-pub fn observe<N>(next_fnc: impl FnMut(N) + 'static) -> Obs<N> {
-    Obs {
-        next_fn: Box::new(next_fnc)
-    }
-}
-
-pub trait Observable<N> {
-    fn subscribe(self, observer: Obs<N>) -> Subject;
-
-    fn pipe(self, oo: &mut [impl FnMut(Self) -> Self]) -> Self where Self: Sized {
-        let mut t = self;
-        for i in oo {
-            t = i(t);
-        }
-        t
-    }
-}
-
-struct BaseObservable<N> {
-    output_function: Box<dyn FnMut(Obs<N>)>,
-}
-
-impl<N> Observable<N> for BaseObservable<N> {
-    fn subscribe(mut self, observer: Obs<N>) -> Subject {
-        (self.output_function)(observer);
-        Subject { subscriber: None }
-    }
-}
-
-// TODO: Add subscribe method to Subscriber
-// and inner observable field `output_observable`
-pub struct Subscriber<N, O: Observable<N>> {
-    output_observable: Option<O>,
-    phantom: PhantomData<N>,
-}
-
-impl<N> Subscriber<N, BaseObservable<N>> {
-    pub fn new(output_fn: Box<dyn FnMut(Obs<N>) + Send + 'static>) -> Subscriber<N, BaseObservable<N>> {
-        Subscriber { output_observable: Some(BaseObservable { output_function: output_fn }), phantom: PhantomData }
-    }
-}
-
-impl<N, O: Observable<N>> Subscriber<N, O> { 
-    pub fn pipe(mut self, observables: &mut [impl FnMut(O) -> O]) -> Self {
-        let mut o = self.output_observable.unwrap();
-
-        for i in observables {
-            o = i(o);
-        }
-        
-        self.output_observable = Some(o);
-        self
-    }
-}
-
-impl<N: 'static, O: Observable<N> + 'static> Observable<N> for Subscriber<N, O> {
-    fn subscribe(mut self, observer: Obs<N>) -> Subject {
-        let oo = self.output_observable.take().unwrap();
-
-        let mut subject = oo.subscribe(observer);
-        // self.output_observable = Some(oo);
-        subject.subscriber = Some(Box::new(self));
-        subject
-    }
-}
-
-// pub trait OutputObservable<V>: Observable<V> {
-//     type OutputFn;
-// }
-// 
-// impl<T> OutputObservable<T> for Subscriber<T> {
-//     type OutputFn = Box<dyn FnMut(dyn Observer<NexVal = T, NextFn = Box<dyn FnMut(T)>>)>;
-//     //type OutputFn = Box<dyn FnMut(T)>;
-// }
-
-pub struct Map<T: Observable<V>, V, R> {
-    inner_obs: T,
-    transform_fn: fn(V) -> R,
-}
-
-pub fn map<T: Observable<V>, V, R>(mapfn: fn(V) -> R) -> impl FnMut(T) -> Map<T, V, R> {
-     move |h: T| -> Map<T, V, R> {
-        Map { inner_obs: h, transform_fn: mapfn, }
-    }
-}
-
-impl<T: Observable<V>, V: 'static, R: 'static> Observable<R> for Map<T, V, R> {
-
-    fn subscribe(self, mut observer: Obs<R>) -> Subject {
-
-        let map_observer = observe(move |i: V| {
-            let v = (self.transform_fn)(i);
-            observer.next(v);
+        task::spawn(async move {
+            while let Some(i) = rx.recv().await {
+                *done_c.lock().unwrap() = i;
+            }
 
         });
-        self.inner_obs.subscribe(map_observer)
+
+        task::spawn(async move {
+            for i in 0..=10 {
+                if *done.lock().unwrap() == true {
+                    break;
+                }
+                o.next(i);
+            }
+            o.complete();
+        });
+
+       // UnsubscribeLogic::Logic(Box::new(move || {
+       //     let tx = tx.clone();
+       //     task::spawn(Box::pin(async move {
+       //         if let Err(_) = tx.send(true).await {
+       //             println!("receiver dropped");
+       //             return;
+       //         }
+       //     }));
+       // }))
+       // UnsubscribeLogic::Future(Box::pin(async move {
+       //     if let Err(_) = tx.send(true).await {
+       //         println!("receiver dropped");
+       //         return;
+       //     }
+       // }))
+        UnsubscribeLogic::Wrapped(Box::new(Observable::new(move |_s| {
+            let tx = tx.clone();
+            UnsubscribeLogic::Logic(Box::new(move || {
+                let tx = tx.clone();
+                task::spawn(Box::pin(async move {
+                    if let Err(_) = tx.send(true).await {
+                        println!("receiver dropped");
+                        return;
+                    }
+                }));
+            }))
+        }).subscribe(Subscriber::new(|_: usize| {}, None::<fn()>))))
+    });
+
+    let mut s = s.filter(|x| { x % 2 != 0 } );
+    s.subscribe(o);
+ 
+    let mut s = s.map(|x| {
+        let y = x + 1000;
+        format!("to str {}", y)
+    });
+    
+    // let s = s.take(2);
+     let mut s = s.delay(2);
+
+    let o = Subscriber::new(|v| {
+         // task::spawn(async move {
+         // sleep(Duration::from_secs(3)).await;
+        println!("----- {:?}", v);
+         // });
+    }, Some(|| { println!("Completed ------ .................") })
+    );
+    
+   // let handle = s.subscribe(Subscriber::new(|v| { println!("##### {:?}", v) }
+   //     , None::<fn()>
+   //     ));
+
+    let s = s.exhaust_map(move |s| {
+        println!("in projected {}", s);
+        bar(s).map(move |n| {
+            format!("In inner observable {}", n)
+        })
+    });
+
+    // let mut s = s.delay(3);
+    let mut s = s.map(|a| format!("{} TEST", a) );
+
+    let handle = s.subscribe(o);
+    // let _ = handle.join().await;
+
+//    handle.unsubscribe();
+    // sleep(Duration::from_secs(5)).await;
+    for i in 0..=10 {
+        // if i == 3 { handle.unsubscribe(); }
+        println!("continue main thread {}",  i);
+        sleep(Duration::from_secs(3)).await;
     }
+    
+   // sleep(Duration::from_secs(3)).await;
+    
+    // handle.observable_handle.abort();
+
 }
 
-// impl ObservableOperator for Map {
-// }
+fn foo<T: Send + Sync + 'static>(v: T) -> Observable<i32> {
 
-fn main() {
-    let s = Subscriber::new(Box::new(|mut observer| {
-        for i in 0..10 {
-            observer.next(i);
-        }
-    }));
+    let v_shared = Arc::new(Mutex::new(v));
+    let v_clone = Arc::clone(&v_shared);
 
-    // let v1 = vec![Box::new(map::<BaseObservable<i32>, i32, i32>(|i| { i + 1000}))];
+    Observable::new(move |mut o: Subscriber<_>| {
+        let done = Arc::new(Mutex::new(false));
+        let done_c = Arc::clone(&done);
+        let (tx, mut rx) = channel(10);
 
-    s.subscribe(observe(|v| {
-        println!("{}", v);
-    }));
+        task::spawn(async move {
+            while let Some(i) = rx.recv().await {
+                *done_c.lock().unwrap() = i;
+            }
+
+        });
+
+        let v_clone = Arc::clone(&v_clone);
+        task::spawn(async move {
+            
+            let f = v_clone;
+            for i in 0..=10 {
+                if *done.lock().unwrap() == true {
+                    break;
+                }
+                o.next(i);
+            }
+            o.complete();
+        });
+
+       UnsubscribeLogic::Logic(Box::new(move || {
+           let tx = tx.clone();
+           task::spawn(Box::pin(async move {
+               if let Err(_) = tx.send(true).await {
+                   println!("receiver dropped");
+                   return;
+               }
+           }));
+        }))
+    })
+}
+
+fn bar(v: String) -> Observable<String> {
+
+    // let v_shared = Arc::new(Mutex::new(v));
+    // let v_clone = Arc::clone(&v_shared);
+
+    Observable::new(move |mut o: Subscriber<_>| {
+        let done = Arc::new(Mutex::new(false));
+        let done_c = Arc::clone(&done);
+        let (tx, mut rx) = channel(10);
+
+        task::spawn(async move {
+            while let Some(i) = rx.recv().await {
+                *done_c.lock().unwrap() = i;
+            }
+
+        });
+
+        let v = v.clone();
+        // let v_clone = Arc::clone(&v_clone);
+        task::spawn(async move {
+            
+            for i in 0..=200 {
+                let v = v.clone();
+                if *done.lock().unwrap() == true {
+                    break;
+                }
+                o.next(format!("{} {}", i, v));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            o.complete();
+        });
+
+       UnsubscribeLogic::Logic(Box::new(move || {
+           let tx = tx.clone();
+           task::spawn(Box::pin(async move {
+               if let Err(_) = tx.send(true).await {
+                   println!("receiver dropped");
+                   return;
+               }
+           }));
+        }))
+    })
 }
