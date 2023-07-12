@@ -11,7 +11,7 @@ use std::{
     sync::{
         Arc, Mutex,
     },
-    time::Duration,
+    time::Duration, error::Error, rc::Rc,
 };
 
 use tokio::task::JoinHandle;
@@ -21,7 +21,7 @@ pub trait Observer {
 
     fn next(&mut self, _: Self::NextFnType);
     fn complete(&mut self);
-    fn error(&mut self, _: ObservableError);
+    fn error(&mut self, _: Rc<dyn Error>);
 }
 
 pub trait Subscribeable {
@@ -69,19 +69,25 @@ impl UnsubscribeLogic {
 pub struct Subscriber<NextFnType> {
     next_fn: Box<dyn FnMut(NextFnType) + Send + Sync>,
     complete_fn: Option<Box<dyn FnMut() + Send + Sync>>,
-    error_fn: Option<Box<dyn FnMut(ObservableError) + Send + Sync>>,
+    error_fn: Option<Box<dyn FnMut(Rc<dyn Error>) + Send + Sync>>,
+    completed: bool,
+    fused: bool,
+    errored: bool,
 }
 
 impl<NextFnType> Subscriber<NextFnType> {
     pub fn new(
         next_fnc: impl FnMut(NextFnType) + 'static + Send + Sync,
-        error_fnc: Option<impl FnMut(ObservableError) + 'static + Send + Sync>,
+        error_fnc: Option<impl FnMut(Rc<dyn Error>) + 'static + Send + Sync>,
         complete_fnc: Option<impl FnMut() + 'static + Send + Sync>,
     ) -> Self {
         let mut s = Subscriber {
             next_fn: Box::new(next_fnc),
             complete_fn: None,
             error_fn: None,
+            completed: false,
+            fused: false,
+            errored: false,
         };
 
         if let Some(cfn) = complete_fnc {
@@ -97,35 +103,162 @@ impl<NextFnType> Subscriber<NextFnType> {
 impl<N> Observer for Subscriber<N> {
     type NextFnType = N;
     fn next(&mut self, v: Self::NextFnType) {
+        if self.errored || (self.fused && self.completed) {
+            return;
+        }
         (self.next_fn)(v);
     }
 
     fn complete(&mut self) {
+        if self.errored || (self.fused && self.completed) {
+            return;
+        }
         if let Some(cfn) = &mut self.complete_fn {
             (cfn)();
+            self.completed = true;
         }
     }
 
-    fn error(&mut self, observable_error: ObservableError) {
+    fn error(&mut self, observable_error: Rc<dyn Error>) {
+        if self.errored || (self.fused && self.completed) {
+            return;
+        }
         if let Some(efn) = &mut self.error_fn {
             (efn)(observable_error);
+            self.errored = true;
         }
     }
 }
+
+// Subject ------
+
+pub struct Subject<T> {
+    observers: Vec<Subscriber<T>>,
+    fused: bool,
+}
+
+impl<T: 'static> Subject<T> {
+    pub fn new() -> (SubjectTx<T>, SubjectRx<T>) {
+        let s = Arc::new(Mutex::new(Subject {
+            observers: Vec::with_capacity(15),
+            fused: false
+        }));
+
+        (
+            SubjectTx {
+                source: Arc::clone(&s),
+            },
+            SubjectRx {
+                source: Arc::clone(&s),
+            }
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct SubjectRx<T> {
+    source: Arc<Mutex<Subject<T>>>,
+}
+
+#[derive(Clone)]
+pub struct SubjectTx<T> {
+    source: Arc<Mutex<Subject<T>>>,
+}
+
+impl<T> SubjectRx<T> {
+    pub fn len(&self) -> usize {
+        self.source.lock().unwrap().observers.len()
+    }
+
+    pub fn fuse(self) -> Self {
+        for o in &mut self.source.lock().unwrap().observers {
+            o.fused = true;
+        }
+        self
+    }
+
+    pub fn defuse(self) -> Self {
+        for o in &mut self.source.lock().unwrap().observers {
+            o.fused = false;
+        }
+        self
+    }
+}
+
+impl<T: 'static> Subscribeable for SubjectRx<T> {
+    type ObsType = T;
+
+    fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
+        if self.source.lock().unwrap().fused {
+            v.fused = true;
+        }
+        self.source.lock().unwrap().observers.push(v);
+
+        let source_cloned = Arc::clone(&self.source);
+
+        Subscription::new(
+            UnsubscribeLogic::Logic(Box::new(move || {
+                source_cloned.lock().unwrap().observers.clear();
+            })),
+            None
+        )
+    }
+}
+
+impl<T: 'static> ObservableExt<T> for SubjectRx<T> {}
+
+impl<T: Clone> Observer for SubjectTx<T> {
+    type NextFnType = T;
+
+    fn next(&mut self, v: Self::NextFnType) {
+        for o in &mut self.source.lock().unwrap().observers {
+            o.next(v.clone());
+        }
+    }
+
+    fn error(&mut self, e: Rc<dyn Error>) {
+        for o in &mut self.source.lock().unwrap().observers {
+            o.error(e.clone()); // TODO: change error type to be cloneable
+        }
+    }
+
+    fn complete(&mut self) {
+        for o in &mut self.source.lock().unwrap().observers {
+            o.complete();
+        }
+    }
+}
+
+// Subject -------
 
 pub struct Observable<T> {
     subscribe_fn: Box<dyn FnMut(Subscriber<T>) -> Subscription + Send + Sync>,
+    fused: bool,
 }
 
-impl<T: 'static> Observable<T> {
+impl<T> Observable<T> {
     pub fn new(sf: impl FnMut(Subscriber<T>) -> Subscription + Send + Sync + 'static) -> Self {
         Observable {
             subscribe_fn: Box::new(sf),
+            fused: false,
         }
     }
 
-    pub fn map<U, F>(mut self, f: F) -> Observable<U>
+    pub fn fuse(mut self) -> Self {
+        self.fused = true;
+        self
+    }
+
+    pub fn defuse(mut self) -> Self {
+        self.fused = false;
+        self
+    }
+}
+
+pub trait  ObservableExt<T: 'static>: Subscribeable::<ObsType = T> {
+    fn map<U, F>(mut self, f: F) -> Observable<U>
     where
+        Self: Sized + Send + Sync + 'static,
         F: (FnOnce(T) -> U) + Copy + Sync + Send + 'static,
         U: 'static,
     {
@@ -150,8 +283,9 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn filter<P>(mut self, predicate: P) -> Observable<T>
+    fn filter<P>(mut self, predicate: P) -> Observable<T>
     where
+        Self: Sized + Send + Sync + 'static,
         P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
     {
         Observable::new(move |o| {
@@ -176,7 +310,10 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn skip (mut self, n: usize) -> Observable<T> {
+    fn skip (mut self, n: usize) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+    {
         Observable::new(move |o| {
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
@@ -202,7 +339,10 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn delay(mut self, num_of_ms: u64) -> Observable<T> {
+    fn delay(mut self, num_of_ms: u64) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+    {
         Observable::new(move |o| {
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
@@ -224,7 +364,10 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn take(mut self, n: usize) -> Observable<T> {
+    fn take(mut self, n: usize) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+    {
         let mut i = 0;
 
         Observable::new(move |o| {
@@ -285,8 +428,9 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn switch_map<R: 'static, F>(mut self, project: F) -> Observable<R>
+    fn switch_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
+        Self: Sized + Send + Sync + 'static,
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
@@ -338,8 +482,9 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn merge_map<R: 'static, F>(mut self, project: F) -> Observable<R>
+    fn merge_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
+        Self: Sized + Send + Sync + 'static,
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
@@ -384,8 +529,9 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn concat_map<R: 'static, F>(mut self, project: F) -> Observable<R>
+    fn concat_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
+        Self: Sized + Send + Sync + 'static,
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
@@ -446,8 +592,9 @@ impl<T: 'static> Observable<T> {
         })
     }
 
-    pub fn exhaust_map<R: 'static, F>(mut self, project: F) -> Observable<R>
+    fn exhaust_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
+        Self: Sized + Send + Sync + 'static,
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
@@ -528,10 +675,15 @@ impl<T: 'static> Observable<T> {
 impl<T: 'static> Subscribeable for Observable<T> {
     type ObsType = T;
 
-    fn subscribe(&mut self, v: Subscriber<Self::ObsType>) -> Subscription {
+    fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
+        if self.fused {
+            v.fused = true;
+        }
         (self.subscribe_fn)(v)
     }
 }
+
+impl<T: 'static> ObservableExt<T> for Observable<T> {}
 
 pub struct Subscription {
     unsubscribe_logic: UnsubscribeLogic,
@@ -1365,7 +1517,7 @@ been rejected. Outer observable is {}.",
                 }),
             );
 
-            let outer_o_max_count = 200;
+            let outer_o_max_count = 100;
             let inner_o_max_count = 10;
 
             let observable = make_emit_u32_observable(outer_o_max_count, move |last_emit_value| {

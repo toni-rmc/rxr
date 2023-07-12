@@ -1,3 +1,7 @@
+#![allow(dead_code, unused_variables)]
+
+use std::error::Error;
+use std::fmt::Display;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -33,7 +37,7 @@ struct SomeStruct(usize);
 
 #[tokio::main]
 async fn main() {
-    let o = Subscriber::new(|v| {
+    let o = Subscriber::new(|v: i32| {
         println!("----- {}", v);
         // v.print();
         },
@@ -127,15 +131,15 @@ async fn main() {
    //     , None::<fn()>
    //     ));
 
-   // -- let mut s = s.exhaust_map(move |sval| {
-   // --     println!("in projected {}", sval);
-   // --    // -- bar(sval).map(move |n| {
-   // --    // --     format!("In inner observable {}", n)
-   // --    // -- }).delay(10)
-   // --     bar(sval.to_string(), move |lev| {
-   // --             println!("AFTER CAPTURE {}", lev);
-   // --     })
-   // -- });
+   let mut s = s.exhaust_map(move |sval| {
+       println!("in projected {}", sval);
+      // -- bar(sval).map(move |n| {
+      // --     format!("In inner observable {}", n)
+      // -- }).delay(10)
+       bar(sval.to_string(), move |lev| {
+               println!("AFTER CAPTURE {}", lev);
+       })
+   });
 
     // let mut s = s.delay(100);
     let mut s = s.map(|mut a| {
@@ -145,7 +149,7 @@ async fn main() {
     });
 
     // let mut s = s.take(20); // Bad place to call take()
-    let handle = s.subscribe(o);
+    // ------ let handle = s.subscribe(o);
     // let _ = handle.join().await;
 
     // let mut handle = Arc::new(Mutex::new(Some(handle)));
@@ -165,19 +169,85 @@ async fn main() {
    //     });
    // });
 
-    sleep(Duration::from_secs(19)).await;
+    // -------- sleep(Duration::from_secs(5)).await;
     // let  Some(y) = handle.lock().unwrap().take()
     // else {
     //    return; 
     // };
     
-    if let Err(err) = handle.join().await {
-        println!("{}", err);
-    }
+   // -------- if let Err(err) = handle.join().await {
+   // --------     println!("{}", err);
+   // -------- }
    // sleep(Duration::from_secs(3)).await;
     
     // handle.observable_handle.abort();
 
+    let (mut stx, mut srx) = Subject::new();
+
+    srx.subscribe(
+        Subscriber::new(|x| { println!("UNCHAINED: x is {}", x); },
+        Some(|_| {}),
+        Some(|| {}))
+    );
+
+    srx.clone().map(
+        |x| { format!("'{} stringified'", x) })
+        .subscribe(Subscriber::new(|x| { println!("mapped x is {}", x); },
+        Some(|_| {}),
+        Some(|| {}))
+    );
+
+    let subscr = srx.clone()
+        // .filter(|x| *x < 10)
+        .map(|x| { format!("'{} stringified'", x) })
+        .merge_map(|v| { baz(v, |_| {}) })
+        // .concat_map(|l| bar(l, |_| {}))
+        .subscribe(Subscriber::new(|x| { println!("mapped still x is {}", x); },
+        Some(|_| {}),
+        Some(|| { println!("completed called"); }))
+    );
+
+    // let srx = srx.fuse();
+
+    stx.next(1);
+    //stx.next(19);
+    //stx.next(190);
+    // subscr.unsubscribe();
+    //stx.next(290);
+
+    let mut stxcl = stx.clone();
+    let mut stxclt = stx.clone();
+    let mut srxcl = srx.clone();
+
+    #[derive(Debug)]
+    struct MyErr;
+
+    impl Display for MyErr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+               Ok(())
+           }   
+    }
+
+    impl Error for MyErr {}
+
+    let tstsubs = Subscriber::new(|x| { println!("in second thread"); },
+            Some(|_| {}),
+            None::<fn()>);
+
+    let handle = std::thread::spawn(move || {
+        let _ = std::thread::sleep(Duration::from_secs(5));
+        srxcl.subscribe(tstsubs);
+        stxclt.next(80);
+        // stxclt.error(Rc::new(MyErr));
+    });
+
+    stxcl.next(398);
+    stxcl.complete();
+
+    println!("{}", srx.len());
+    let _ = handle.join();
+
+    let _ = sleep(Duration::from_secs(5)).await;
 }
 
 fn bar(v: String,
@@ -211,6 +281,9 @@ fn bar(v: String,
                 if *done.lock().unwrap() {
                     break;
                 }
+               // if i == 4 {
+               //     o.error(ObservableError::NoInfo);
+               // }
                 last_emit = i;
                 o.next(format!("iv = {} ov = {}", i, v));
                 sleep(Duration::from_millis(1)).await;
@@ -228,5 +301,59 @@ fn bar(v: String,
                }
            }));
         })), Some(jh))
+    })
+}
+
+fn baz(v: String,
+        last_emit_assert: impl FnMut(String) + Send + Sync + 'static,
+) -> Observable<String> {
+
+    // let v_shared = Arc::new(Mutex::new(v));
+    // let v_clone = Arc::clone(&v_shared);
+
+    let last_emit_assert = Arc::new(Mutex::new(last_emit_assert));
+    Observable::new(move |mut o: Subscriber<_>| {
+        let done = Arc::new(Mutex::new(false));
+        let done_c = Arc::clone(&done);
+       // let (tx, mut rx) = channel(10);
+
+       // task::spawn(async move {
+       //     while let Some(i) = rx.recv().await {
+       //         *done_c.lock().unwrap() = i;
+       //     }
+
+       // });
+
+        let mut v = v.clone();
+        // let v_clone = Arc::clone(&v_clone);
+        let last_emit_assert = Arc::clone(&last_emit_assert);
+        let jh = std::thread::spawn(move || {
+            
+            let mut last_emit = 0;
+            for i in 0..=10 {
+                let v = v.clone();
+                if *done.lock().unwrap() {
+                    break;
+                }
+               // if i == 4 {
+               //     o.error(ObservableError::NoInfo);
+               // }
+                last_emit = i;
+                o.next(format!("iv = {} ov = {}", i, v));
+                //sleep(Duration::from_millis(1)).await;
+            }
+            v.push_str("  --");
+            last_emit_assert.lock().unwrap()(v);
+            o.complete();
+        });
+
+       Subscription::new(UnsubscribeLogic::Logic(Box::new(move || {
+           // let tx = tx.clone();
+          // task::spawn(Box::pin(async move {
+          //     if (tx.send(true).await).is_err() {
+          //         println!("receiver dropped");
+          //     }
+          // }));
+        })), None)
     })
 }
