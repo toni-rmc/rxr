@@ -11,6 +11,8 @@ use tokio::sync::mpsc::channel;
 use tokio::time::{sleep, Duration};
 use tokio::task;
 
+use rxr::observer::Observer;
+
 struct ObjectTestOriginal {
     pub v: i128,
 }
@@ -198,10 +200,11 @@ async fn main() {
     );
 
     let subscr = srx.clone()
-        // .filter(|x| *x < 10)
+        .filter(|x| *x < 1000)
         .map(|x| { format!("'{} stringified'", x) })
         .merge_map(|v| { baz(v, |_| {}) })
         // .concat_map(|l| bar(l, |_| {}))
+        .filter(|_| true)
         .subscribe(Subscriber::new(|x| { println!("mapped still x is {}", x); },
         Some(|_| {}),
         Some(|| { println!("completed called"); }))
