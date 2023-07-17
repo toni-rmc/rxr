@@ -39,7 +39,7 @@ struct SomeStruct(usize);
 
 #[tokio::main]
 async fn main() {
-    let o = Subscriber::new(|v: i32| {
+    let o = Subscriber::new(|v| {
         println!("----- {}", v);
         // v.print();
         },
@@ -90,7 +90,7 @@ async fn main() {
             if (tx.send(true).await).is_err() {
                 println!("receiver dropped");
             }
-        })), Some(jh))
+        })), SubscriptionHandle::JoinTask(jh))
        // let obs = Observable::new(move |_s| {
        //    let tx = tx.clone();
        //    Subscription::new(UnsubscribeLogic::Logic(Box::new(move || {
@@ -119,7 +119,7 @@ async fn main() {
    // -- });
     
    // let mut s = s.delay(190);
-   let mut s = s.skip(8);
+   let mut s = s.take(15);
 
   // --  let o = Subscriber::new(|v| {
   // --       // task::spawn(async move {
@@ -151,8 +151,8 @@ async fn main() {
     });
 
     // let mut s = s.take(20); // Bad place to call take()
-    // ------ let handle = s.subscribe(o);
-    // let _ = handle.join().await;
+    let handle = s.subscribe(o);
+    let _ = handle.join().await;
 
     // let mut handle = Arc::new(Mutex::new(Some(handle)));
     // let handle_cloned = Arc::clone(&handle);
@@ -303,7 +303,7 @@ fn bar(v: String,
                    println!("receiver dropped");
                }
            }));
-        })), Some(jh))
+        })), SubscriptionHandle::JoinTask(jh))
     })
 }
 
@@ -357,6 +357,6 @@ fn baz(v: String,
           //         println!("receiver dropped");
           //     }
           // }));
-        })), None)
+        })), SubscriptionHandle::JoinThread(jh))
     })
 }

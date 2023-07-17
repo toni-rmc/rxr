@@ -1,3 +1,5 @@
+use crate::{SubscriptionHandle, SubscriptionError};
+
 use super::*;
 
 use tokio::sync::mpsc::channel;
@@ -48,7 +50,7 @@ pub fn make_emit_u32_observable(
                     }
                 }));
             })),
-            Some(jh),
+            SubscriptionHandle::JoinTask(jh),
         )
     })
 }
@@ -75,7 +77,7 @@ fn unchained_observable() {
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
         o.next(value);
-        Subscription::new(UnsubscribeLogic::Nil, None)
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
     s.subscribe(o);
@@ -106,7 +108,7 @@ fn map_observable() {
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
         o.next(value);
         o.complete();
-        Subscription::new(UnsubscribeLogic::Nil, None)
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
     s.subscribe(o);
@@ -170,7 +172,7 @@ fn filter_observable() {
             o.next(i);
         }
         o.complete();
-        Subscription::new(UnsubscribeLogic::Nil, None)
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
     s.subscribe(o);
@@ -232,7 +234,7 @@ fn delay_observable() {
             o.next(i);
         }
         o.complete();
-        Subscription::new(UnsubscribeLogic::Nil, None)
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
     s.subscribe(o);
@@ -316,7 +318,7 @@ fn skip_observable() {
             o.next(i);
         }
         o.complete();
-        Subscription::new(UnsubscribeLogic::Nil, None)
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
     s.subscribe(o);
@@ -405,7 +407,7 @@ is {} and last emitted value is {}",
     let s = observable.subscribe(o);
 
     // Await the task started in observable.
-    if let Err(e) = s.join().await {
+    if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
         // Check if task in observable panicked.
         if e.is_panic() {
             // If yes, resume and unwind panic to make the test fail with
@@ -514,7 +516,7 @@ Expected {}, found {}",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join().await {
+        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
             // Check if task in outer observable panicked.
             if e.is_panic() {
                 // If yes, resume and unwind panic to make the test fail with
@@ -679,7 +681,7 @@ been rejected. Outer observable is {}.",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join().await {
+        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
             // Check if task in outer observable panicked.
             if e.is_panic() {
                 // If yes, resume and unwind panic to make the test fail with
@@ -829,7 +831,7 @@ outer observable value should have been {}, got {} instead",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join().await {
+        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
             // Check if task in outer observable panicked.
             if e.is_panic() {
                 // If yes, resume and unwind panic to make the test fail with
@@ -947,7 +949,7 @@ Expected {}, found {}",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join().await {
+        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
             // Check if task in outer observable panicked.
             if e.is_panic() {
                 // If yes, resume and unwind panic to make the test fail with

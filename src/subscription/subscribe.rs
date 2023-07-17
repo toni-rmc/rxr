@@ -1,6 +1,6 @@
-use std::{error::Error, rc::Rc, future::Future, pin::Pin};
+use std::{thread::JoinHandle as ThreadJoinHandle, error::Error, rc::Rc, future::Future, pin::Pin, any::Any};
 
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinError};
 
 use crate::observer::Observer;
 
@@ -82,16 +82,26 @@ impl<N> Observer for Subscriber<N> {
     }
 }
 
+pub enum SubscriptionHandle {
+    Nil,
+    JoinTask(JoinHandle<()>),
+    JoinThread(ThreadJoinHandle<()>)
+}
+
+pub enum SubscriptionError {
+    JoinTaskError(JoinError),
+    JoinThreadError(Box<dyn Any + Send>)
+}
 
 pub struct Subscription {
     unsubscribe_logic: UnsubscribeLogic,
-    pub subscription_future: Option<JoinHandle<()>>,
+    pub subscription_future: SubscriptionHandle,
 }
 
 impl Subscription {
     pub fn new(
         unsubscribe_logic: UnsubscribeLogic,
-        subscription_future: Option<JoinHandle<()>>,
+        subscription_future: SubscriptionHandle,
     ) -> Self {
         Subscription {
             unsubscribe_logic,
@@ -99,12 +109,20 @@ impl Subscription {
         }
     }
 
-    pub async fn join(self) -> Result<(), tokio::task::JoinError> {
-        if let Some(jh) = self.subscription_future {
-            let r = jh.await;
-            return r;
+    pub async fn join(self) -> Result<(), SubscriptionError> {
+        match self.subscription_future {
+            SubscriptionHandle::JoinTask(task_handle) => {
+                let r = task_handle.await;
+                return r.map_err(|e| SubscriptionError::JoinTaskError(e));
+            },
+            SubscriptionHandle::JoinThread(thread_handle) => {
+                let r = thread_handle.join();
+                return r.map_err(|e| SubscriptionError::JoinThreadError(e));
+            },
+            SubscriptionHandle::Nil => {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 }
 

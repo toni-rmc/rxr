@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use crate::subscription::subscribe::{Subscribeable, Subscriber, Subscription, Unsubscribeable};
+use crate::{subscription::subscribe::{Subscribeable, Subscriber, Subscription, Unsubscribeable}, SubscriptionHandle};
 use crate::{observer::Observer, subscription::subscribe::UnsubscribeLogic};
 
 pub struct Observable<T> {
@@ -177,7 +177,8 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             );
 
             let mut unsubscriber = self.subscribe(u);
-            let ijh = unsubscriber.subscription_future.take();
+            let ijh = unsubscriber.subscription_future;
+            unsubscriber.subscription_future = SubscriptionHandle::Nil;
 
             let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
             let u_cloned = Arc::clone(&unsubscriber);

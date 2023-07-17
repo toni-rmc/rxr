@@ -77,7 +77,7 @@ impl<T: 'static> Subscribeable for SubjectRx<T> {
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned.lock().unwrap().observers.clear();
             })),
-            None,
+            crate::SubscriptionHandle::Nil,
         )
     }
 }
@@ -93,7 +93,7 @@ impl<T: Clone> Observer for SubjectTx<T> {
 
     fn error(&mut self, e: Rc<dyn Error>) {
         for o in &mut self.source.lock().unwrap().observers {
-            o.error(e.clone()); // TODO: change error type to be cloneable
+            o.error(e.clone());
         }
     }
 
