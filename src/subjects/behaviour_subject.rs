@@ -6,37 +6,39 @@ use std::{
 
 use crate::{
     observer::Observer,
-    subscription::subscribe::{Subscribeable, Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle}
+    subscription::subscribe::{Subscribeable, Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle},
 };
 
-pub struct Subject<T> {
+pub struct BehaviourSubject<T> {
+    value: T,
     observers: Vec<Subscriber<T>>,
     fused: bool,
     closed: bool,
 }
 
-impl<T: 'static> Subject<T> {
-    pub fn new() -> (SubjectTx<T>, SubjectRx<T>) {
-        let s = Arc::new(Mutex::new(Subject {
+impl<T: Send + Sync + 'static> BehaviourSubject<T> {
+    pub fn new(value: T) -> (BehaviourSubjectTx<T>, BehaviourSubjectRx<T>) {
+        let s = Arc::new(Mutex::new(BehaviourSubject {
+            value,
             observers: Vec::with_capacity(15),
             fused: false,
             closed: false,
         }));
 
         (
-            SubjectTx(Arc::clone(&s)),
-            SubjectRx(Arc::clone(&s)),
+            BehaviourSubjectTx(Arc::clone(&s)),
+            BehaviourSubjectRx(Arc::clone(&s)),
         )
     }
 }
 
 #[derive(Clone)]
-pub struct SubjectRx<T>(Arc<Mutex<Subject<T>>>);
+pub struct BehaviourSubjectRx<T>(Arc<Mutex<BehaviourSubject<T>>>);
 
 #[derive(Clone)]
-pub struct SubjectTx<T>(Arc<Mutex<Subject<T>>>);
+pub struct BehaviourSubjectTx<T>(Arc<Mutex<BehaviourSubject<T>>>);
 
-impl<T> SubjectRx<T> {
+impl<T> BehaviourSubjectRx<T> {
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
@@ -56,7 +58,7 @@ impl<T> SubjectRx<T> {
     }
 }
 
-impl<T: 'static> Subscribeable for SubjectRx<T> {
+impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviourSubjectRx<T> {
     type ObsType = T;
 
     fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
@@ -67,6 +69,8 @@ impl<T: 'static> Subscribeable for SubjectRx<T> {
             if src.fused {
                 v.set_fused(true);
             }
+            // Subscriber emits stored value right away when being registered.
+            v.next(src.value.clone());
             src.observers.push(v);
         } else {
             return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
@@ -77,20 +81,22 @@ impl<T: 'static> Subscribeable for SubjectRx<T> {
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned.lock().unwrap().observers.clear();
-                // Maybe also mark Subject as closed?
+                // Maybe also mark BehaviourSubject as closed?
             })),
             SubscriptionHandle::Nil,
         )
     }
 }
 
-impl<T: Clone> Observer for SubjectTx<T> {
+impl<T: Clone> Observer for BehaviourSubjectTx<T> {
     type NextFnType = T;
 
     fn next(&mut self, v: Self::NextFnType) {
         if self.0.lock().unwrap().closed {
             return;
         }
+        // Store new value in BehaviourSubject.
+        self.0.lock().unwrap().value = v.clone();
         for o in &mut self.0.lock().unwrap().observers {
             o.next(v.clone());
         }
@@ -123,21 +129,21 @@ impl<T: Clone> Observer for SubjectTx<T> {
     }
 }
 
-impl<T: Clone + 'static> From<SubjectTx<T>> for Subscriber<T> {
-    fn from(value: SubjectTx<T>) -> Self {
+impl<T: Clone + Send + 'static> From<BehaviourSubjectTx<T>> for Subscriber<T> {
+    fn from(value: BehaviourSubjectTx<T>) -> Self {
         let mut vn = value.clone();
         let mut ve = value.clone();
         let mut vc = value.clone();
         Subscriber::new(
             move |v| {
-                println!("IN FROM SUBJECTTX {} ", Arc::strong_count(&vn.0));
+                println!("IN FROM REPLAYSUBJECTTX {} ", Arc::strong_count(&vn.0));
                 vn.next(v);
             },
             Some(move |e| {
                 ve.error(e)
             }),
             Some(move || {
-                println!("IN FROM COMPLETE SUBJECTTX");
+                println!("IN FROM COMPLETE REPLAYSUBJECTTX");
                 vc.complete()
             })
         )
@@ -148,23 +154,23 @@ impl<T: Clone + 'static> From<SubjectTx<T>> for Subscriber<T> {
 mod test {
     use std::{sync::{Arc, Mutex}, error::Error, rc::Rc};
 
-    use crate::{subscribe::Subscriber, Subject, observer::Observer, Subscribeable};
+    use crate::{subscribe::Subscriber, observer::Observer, Subscribeable, subjects::BehaviourSubject};
 
     fn subject_value_registers() -> (
-        Vec<impl FnOnce() -> Subscriber<usize>>,
-        Arc<Mutex<Vec<usize>>>,
-        Arc<Mutex<Vec<usize>>>,
-        Arc<Mutex<Vec<usize>>>) {
+        Vec<impl FnOnce() -> Subscriber<i32>>,
+        Arc<Mutex<Vec<i32>>>,
+        Arc<Mutex<Vec<i32>>>,
+        Arc<Mutex<Vec<i32>>>) {
 
-        let nexts: Vec<usize> = Vec::with_capacity(5);
+        let nexts: Vec<i32> = Vec::with_capacity(5);
         let nexts = Arc::new(Mutex::new(nexts));
         let nexts_c = Arc::clone(&nexts);
 
-        let completes: Vec<usize> = Vec::with_capacity(5);
+        let completes: Vec<i32> = Vec::with_capacity(5);
         let completes = Arc::new(Mutex::new(completes));
         let completes_c = Arc::clone(&completes);
 
-        let errors: Vec<usize> = Vec::with_capacity(5);
+        let errors: Vec<i32> = Vec::with_capacity(5);
         let errors = Arc::new(Mutex::new(errors));
         let errors_c = Arc::clone(&errors);
 
@@ -187,26 +193,27 @@ mod test {
     }
 
     #[test]
-    fn subject_emit_than_complete() {
+    fn behaviour_subject_emit_than_complete() {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = Subject::new();
+        let (mut stx, mut srx) = BehaviourSubject::new(9);
 
         // Emit but no registered subsribers yet.
         stx.next(1);
         
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 0);
+        assert_eq!(nexts.lock().unwrap().last(), None);
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber.
+        // Register subsriber and emit stored value.
         srx.subscribe(x); // 1st
 
-        // Registered but nothing is emitted after.
         assert_eq!(srx.len(), 1);
-        assert_eq!(nexts.lock().unwrap().len(), 0);
+        assert_eq!(nexts.lock().unwrap().len(), 1);
+        assert_eq!(nexts.lock().unwrap().last(), Some(&1));
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -214,7 +221,8 @@ mod test {
         stx.next(2);
 
         assert_eq!(srx.len(), 1);
-        assert_eq!(nexts.lock().unwrap().len(), 1);
+        assert_eq!(nexts.lock().unwrap().len(), 2);
+        assert_eq!(nexts.lock().unwrap().last(), Some(&2));
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -223,7 +231,8 @@ mod test {
         stx.next(4);
 
         assert_eq!(srx.len(), 1);
-        assert_eq!(nexts.lock().unwrap().len(), 3);
+        assert_eq!(nexts.lock().unwrap().len(), 4);
+        assert_eq!(nexts.lock().unwrap().last(), Some(&4));
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -234,7 +243,8 @@ mod test {
         srx.subscribe(z); // 3rd
 
         assert_eq!(srx.len(), 3);
-        assert_eq!(nexts.lock().unwrap().len(), 3);
+        assert_eq!(nexts.lock().unwrap().len(), 6);
+        assert_eq!(nexts.lock().unwrap().last(), Some(&4));
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -243,7 +253,8 @@ mod test {
         stx.next(6);
 
         assert_eq!(srx.len(), 3);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
+        assert_eq!(nexts.lock().unwrap().last(), Some(&6));
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -251,7 +262,7 @@ mod test {
         stx.complete();
 
         assert_eq!(srx.len(), 0);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 3);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -263,25 +274,30 @@ mod test {
         stx.next(9);
 
         assert_eq!(srx.len(), 0);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 3);
         assert_eq!(errors.lock().unwrap().len(), 0);
     }
 
     #[test]
-    fn subject_emit_than_error() {
+    fn behaviour_subject_emit_than_error() {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
 
-        let (mut stx, mut srx) = Subject::new();
+        let (mut stx, mut srx) = BehaviourSubject::new(1);
 
-        // Register some subsribers.
+        // Register some subsribers and emit stored values.
         srx.subscribe(x);
         srx.subscribe(y);
         srx.subscribe(z);
+
+        assert_eq!(srx.len(), 3);
+        assert_eq!(nexts.lock().unwrap().len(), 3);
+        assert_eq!(completes.lock().unwrap().len(), 0);
+        assert_eq!(errors.lock().unwrap().len(), 0);
 
         // Emit some values.
         stx.next(1);
@@ -289,7 +305,7 @@ mod test {
         stx.next(3);
 
         assert_eq!(srx.len(), 3);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
@@ -308,7 +324,7 @@ mod test {
         stx.error(Rc::new(MyErr));
 
         assert_eq!(srx.len(), 0);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 3);
 
@@ -320,9 +336,8 @@ mod test {
         stx.next(6);
 
         assert_eq!(srx.len(), 0);
-        assert_eq!(nexts.lock().unwrap().len(), 9);
+        assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 3);
     }
 }
-

@@ -1,4 +1,4 @@
-use crate::{SubscriptionHandle, SubscriptionError};
+use crate::subscribe::SubscriptionError;
 
 use super::*;
 

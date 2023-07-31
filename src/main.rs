@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use rxr::*;
 
+use rxr::subjects::{BehaviourSubject, ReplaySubject, BufSize};
+use rxr::subscribe::{Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle, Unsubscribeable};
 use tokio::sync::mpsc::channel;
 use tokio::time::{sleep, Duration};
 use tokio::task;
@@ -39,7 +41,7 @@ struct SomeStruct(usize);
 
 #[tokio::main]
 async fn main() {
-    let o = Subscriber::new(|v| {
+    let o = Subscriber::new(|v: i32| {
         println!("----- {}", v);
         // v.print();
         },
@@ -151,8 +153,8 @@ async fn main() {
     });
 
     // let mut s = s.take(20); // Bad place to call take()
-    let handle = s.subscribe(o);
-    let _ = handle.join().await;
+    // let handle = s.subscribe(o);
+    // let _ = handle.join().await;
 
     // let mut handle = Arc::new(Mutex::new(Some(handle)));
     // let handle_cloned = Arc::clone(&handle);
@@ -184,35 +186,40 @@ async fn main() {
     
     // handle.observable_handle.abort();
 
-    let (mut stx, mut srx) = Subject::new();
+    let (mut stx, mut srx) = BehaviourSubject::new("100".to_string());
 
+    stx.next("100009".to_string());
+
+    let _ = sleep(Duration::from_millis(1)).await;
     srx.subscribe(
         Subscriber::new(|x| { println!("UNCHAINED: x is {}", x); },
-        Some(|_| {}),
-        Some(|| {}))
+        Some(|_| { println!("error 1 called"); }),
+        Some(|| { println!("completed 1 called"); }))
     );
 
     srx.clone().map(
         |x| { format!("'{} stringified'", x) })
         .subscribe(Subscriber::new(|x| { println!("mapped x is {}", x); },
-        Some(|_| {}),
-        Some(|| {}))
+        Some(|_| { println!("error 2 called"); }),
+        Some(|| { println!("completed 2 called"); }))
     );
 
     let subscr = srx.clone()
-        .filter(|x| *x < 1000)
+        // .filter(|x| *x < 1000)
         .map(|x| { format!("'{} stringified'", x) })
         .merge_map(|v| { baz(v, |_| {}) })
         // .concat_map(|l| bar(l, |_| {}))
         .filter(|_| true)
         .subscribe(Subscriber::new(|x| { println!("mapped still x is {}", x); },
-        Some(|_| {}),
-        Some(|| { println!("completed called"); }))
+        Some(|_| { println!("error 3 called"); }),
+        Some(|| { println!("completed 3 called"); }))
     );
 
     // let srx = srx.fuse();
 
-    stx.next(1);
+    stx.next("1".to_string());
+    
+    let mut test_subject_as_subscriber = bar("sas".to_string(), |_| {});
     //stx.next(19);
     //stx.next(190);
     // subscr.unsubscribe();
@@ -238,13 +245,26 @@ async fn main() {
             None::<fn()>);
 
     let handle = std::thread::spawn(move || {
-        let _ = std::thread::sleep(Duration::from_secs(5));
+        let _ = std::thread::sleep(Duration::from_secs(1));
         srxcl.subscribe(tstsubs);
-        stxclt.next(80);
+        stxclt.next("80".to_string());
+        // let _ = std::thread::sleep(Duration::from_millis(20));
         // stxclt.error(Rc::new(MyErr));
     });
 
-    stxcl.next(398);
+    let mut tst0 = test_subject_as_subscriber.take(3);
+    let sbs = tst0.subscribe(stx.clone().into());
+
+    tst0.subscribe(Subscriber::new(
+        |v| {
+            println!("Other Subscriber {}", v)
+        },
+        Some(|_| { println!("Other Subscriber Error") }),
+        Some(|| { println!("Other Subscriber Complete") })).into()
+    );
+
+    stxcl.next("398".to_string());
+    let _ = std::thread::sleep(Duration::from_secs(3));
     stxcl.complete();
 
     println!("{}", srx.len());

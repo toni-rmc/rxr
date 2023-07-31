@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{subscription::subscribe::{Subscribeable, Subscriber, Subscription, Unsubscribeable}, SubscriptionHandle};
+use crate::subscription::subscribe::{Subscribeable, Subscriber, Subscription, Unsubscribeable, SubscriptionHandle};
 use crate::{observer::Observer, subscription::subscribe::UnsubscribeLogic};
 
 pub struct Observable<T> {
