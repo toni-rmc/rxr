@@ -4,7 +4,9 @@ use std::{
     time::Duration,
 };
 
-use crate::subscription::subscribe::{Subscribeable, Subscriber, Subscription, Unsubscribeable, SubscriptionHandle};
+use crate::subscription::subscribe::{
+    Subscribeable, Subscriber, Subscription, SubscriptionHandle, Unsubscribeable,
+};
 use crate::{observer::Observer, subscription::subscribe::UnsubscribeLogic};
 
 pub struct Observable<T> {
@@ -151,7 +153,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+            let (tx, rx) = std::sync::mpsc::channel();
             let mut signal_sent = false;
 
             let u = Subscriber::new(
@@ -162,10 +164,10 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     } else if !signal_sent {
                         let tx = tx.clone();
                         signal_sent = true;
-                        tokio::task::spawn(async move {
-                            // println!("Send >>>>>>>>>>>>>>>");
-                            tx.send(true).await.unwrap();
-                        });
+                        // std::thread::spawn(move || {
+                        // println!("Send >>>>>>>>>>>>>>>");
+                        let _ = tx.send(true);
+                        // });
                     }
                 },
                 Some(move |observable_error| {
@@ -183,8 +185,8 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
             let u_cloned = Arc::clone(&unsubscriber);
 
-            let _ = tokio::task::spawn(async move {
-                if let Some(_) = rx.recv().await {
+            let _ = std::thread::spawn(move || {
+                if let Ok(_) = rx.recv() {
                     // println!("SIGNAL received");
                     if let Some(s) = unsubscriber.lock().unwrap().take() {
                         // println!("UNSUBSCRIBE called");
@@ -193,6 +195,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 }
                 // println!("RECEIVER dropped in take()");
             });
+
             Subscription::new(
                 UnsubscribeLogic::Logic(Box::new(move || {
                     if let Some(s) = u_cloned.lock().unwrap().take() {
@@ -427,12 +430,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
                     // Do not subscribe current inner subscription if previous one is active.
                     if !is_previous_subscription_active {
-                        tokio::task::spawn(async move {
-                            // Mark this inner subscription as active so other following
-                            // subscriptions are rejected until this one completes.
-                            *as_cloned.lock().unwrap() = true;
-                            inner_observable.subscribe(inner_subscriber);
-                        });
+                        // tokio::task::spawn(async move {
+                        // Mark this inner subscription as active so other following
+                        // subscriptions are rejected until this one completes.
+                        *as_cloned.lock().unwrap() = true;
+                        inner_observable.subscribe(inner_subscriber);
+                        // });
                     }
                 },
                 Some(move |observable_error| {

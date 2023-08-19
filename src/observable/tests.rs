@@ -1,9 +1,5 @@
-use crate::subscribe::SubscriptionError;
-
 use super::*;
 
-use tokio::sync::mpsc::channel;
-use tokio::task;
 use tokio::time::{sleep, Duration};
 
 pub fn make_emit_u32_observable(
@@ -15,16 +11,16 @@ pub fn make_emit_u32_observable(
     Observable::new(move |mut o: Subscriber<_>| {
         let done = Arc::new(Mutex::new(false));
         let done_c = Arc::clone(&done);
-        let (tx, mut rx) = channel(10);
+        let (tx, rx) = std::sync::mpsc::channel();
 
-        task::spawn(async move {
-            while let Some(i) = rx.recv().await {
+        std::thread::spawn(move || {
+            if let Ok(i) = rx.recv() {
                 *done_c.lock().unwrap() = i;
             }
         });
 
         let last_emit_assert = Arc::clone(&last_emit_assert);
-        let jh = task::spawn(async move {
+        let jh = std::thread::spawn(move || {
             let mut last_emit = 0;
 
             for i in 0..=end {
@@ -34,23 +30,19 @@ pub fn make_emit_u32_observable(
                 last_emit = i;
                 o.next(i);
                 // Important. Put an await point after each emit.
-                sleep(Duration::from_millis(1)).await;
+                std::thread::sleep(Duration::from_millis(1));
             }
-            last_emit_assert.lock().unwrap()(last_emit);
             o.complete();
+            last_emit_assert.lock().unwrap()(last_emit);
         });
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                let tx = tx.clone();
-                task::spawn(Box::pin(async move {
-                    if let Err(_) = tx.send(true).await {
-                        println!("receiver dropped");
-                        return;
-                    }
-                }));
+                if let Err(_) = tx.send(true) {
+                    println!("receiver dropped");
+                }
             })),
-            SubscriptionHandle::JoinTask(jh),
+            SubscriptionHandle::JoinThread(jh),
         )
     })
 }
@@ -208,6 +200,11 @@ fn filter_observable() {
         last_emit_value.lock().unwrap().completed,
         "filter operator did not completed observable"
     );
+
+    assert!(
+        last_emit_value.lock().unwrap().last_value == last - 1,
+        "filter operator did not emit"
+    );
 }
 
 #[test]
@@ -351,7 +348,7 @@ fn skip_observable() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn take_observable() {
     let take_bound = 7_u32;
     let last_emit_value = Arc::new(Mutex::new(CheckFinished {
@@ -378,6 +375,7 @@ async fn take_observable() {
         },
         Some(|_observable_error| {}),
         Some(move || {
+            println!("~~~~~~~~~~~~~~~~~~~~ BEFORE COMPLETE ~~~~~~~~~~~~~~~~~");
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value
@@ -406,14 +404,12 @@ is {} and last emitted value is {}",
     let mut observable = observable.take(take_bound.try_into().unwrap());
     let s = observable.subscribe(o);
 
-    // Await the task started in observable.
-    if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
+    // Await the thread started in observable.
+    if let Err(e) = s.join_thread() {
         // Check if task in observable panicked.
-        if e.is_panic() {
-            // If yes, resume and unwind panic to make the test fail with
-            // proper error message.
-            std::panic::resume_unwind(e.into_panic());
-        }
+        // If yes, resume and unwind panic to make the test fail with
+        // proper error message.
+        std::panic::resume_unwind(e);
     };
     assert!(
         last_emit_value.lock().unwrap().completed,
@@ -421,8 +417,8 @@ is {} and last emitted value is {}",
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn switch_map_observable() {
+#[test]
+fn switch_map_observable() {
     let last_emits_count = Arc::new(Mutex::new(0_u32));
     let last_emits_count2 = Arc::clone(&last_emits_count);
     let inner_emits_cnt = Arc::new(Mutex::new(0_u32));
@@ -515,18 +511,18 @@ Expected {}, found {}",
 
         let s = observable.subscribe(o);
 
-        // Await the task started in outer observable.
-        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
+        // Await the thread started in outer observable.
+        if let Err(e) = s.join_thread() {
             // Check if task in outer observable panicked.
-            if e.is_panic() {
-                // If yes, resume and unwind panic to make the test fail with
-                // proper error message.
-                std::panic::resume_unwind(e.into_panic());
-            }
+            //if e.is_panic() {
+            // If yes, resume and unwind panic to make the test fail with
+            // proper error message.
+            std::panic::resume_unwind(e);
+            //}
         };
 
         // Give some time to make sure all inner observables are finished.
-        sleep(Duration::from_millis(3000)).await;
+        std::thread::sleep(Duration::from_millis(3000));
 
         assert!(
             *last_emits_count.lock().unwrap() == outer_o_max_count,
@@ -681,13 +677,13 @@ been rejected. Outer observable is {}.",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
+        if let Err(e) = s.join_thread() {
             // Check if task in outer observable panicked.
-            if e.is_panic() {
-                // If yes, resume and unwind panic to make the test fail with
-                // proper error message.
-                std::panic::resume_unwind(e.into_panic());
-            }
+            // if e.is_panic() {
+            // If yes, resume and unwind panic to make the test fail with
+            // proper error message.
+            std::panic::resume_unwind(e);
+            // }
         };
         // Make sure to give time to make sure all inner observables are finished.
         sleep(Duration::from_millis(7000)).await;
@@ -831,13 +827,13 @@ outer observable value should have been {}, got {} instead",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
+        if let Err(e) = s.join_thread() {
             // Check if task in outer observable panicked.
-            if e.is_panic() {
-                // If yes, resume and unwind panic to make the test fail with
-                // proper error message.
-                std::panic::resume_unwind(e.into_panic());
-            }
+            // if e.is_panic() {
+            // If yes, resume and unwind panic to make the test fail with
+            // proper error message.
+            std::panic::resume_unwind(e);
+            // }
         };
         // Make sure to give time to make sure all inner observables are finished.
         sleep(Duration::from_millis(25000)).await;
@@ -949,13 +945,13 @@ Expected {}, found {}",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(SubscriptionError::JoinTaskError(e)) = s.join().await {
+        if let Err(e) = s.join_thread() {
             // Check if task in outer observable panicked.
-            if e.is_panic() {
-                // If yes, resume and unwind panic to make the test fail with
-                // proper error message.
-                std::panic::resume_unwind(e.into_panic());
-            }
+            // if e.is_panic() {
+            // If yes, resume and unwind panic to make the test fail with
+            // proper error message.
+            std::panic::resume_unwind(e);
+            // }
         };
 
         // Give some time to make sure all inner observables are finished.

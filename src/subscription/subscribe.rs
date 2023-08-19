@@ -1,6 +1,9 @@
-use std::{thread::JoinHandle as ThreadJoinHandle, error::Error, rc::Rc, future::Future, pin::Pin, any::Any};
+use std::{
+    any::Any, error::Error, future::Future, pin::Pin, sync::Arc,
+    thread::JoinHandle as ThreadJoinHandle,
+};
 
-use tokio::task::{JoinHandle, JoinError};
+use tokio::task::{JoinError, JoinHandle};
 
 use crate::observer::Observer;
 
@@ -15,9 +18,9 @@ pub trait Unsubscribeable {
 }
 
 pub struct Subscriber<NextFnType> {
-    next_fn: Box<dyn FnMut(NextFnType) + Send + Sync>,
+    next_fn: Box<dyn FnMut(NextFnType) + Send>,
     complete_fn: Option<Box<dyn FnMut() + Send + Sync>>,
-    error_fn: Option<Box<dyn FnMut(Rc<dyn Error>) + Send + Sync>>,
+    error_fn: Option<Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>>,
     completed: bool,
     fused: bool,
     errored: bool,
@@ -25,8 +28,8 @@ pub struct Subscriber<NextFnType> {
 
 impl<NextFnType> Subscriber<NextFnType> {
     pub fn new(
-        next_fnc: impl FnMut(NextFnType) + 'static + Send + Sync,
-        error_fnc: Option<impl FnMut(Rc<dyn Error>) + 'static + Send + Sync>,
+        next_fnc: impl FnMut(NextFnType) + 'static + Send,
+        error_fnc: Option<impl FnMut(Arc<dyn Error + Send + Sync>) + 'static + Send + Sync>,
         complete_fnc: Option<impl FnMut() + 'static + Send + Sync>,
     ) -> Self {
         let mut s = Subscriber {
@@ -47,7 +50,7 @@ impl<NextFnType> Subscriber<NextFnType> {
         s
     }
 
-   pub(crate) fn set_fused(&mut self, f: bool) {
+    pub(crate) fn set_fused(&mut self, f: bool) {
         self.fused = f;
     }
 }
@@ -71,7 +74,7 @@ impl<N> Observer for Subscriber<N> {
         }
     }
 
-    fn error(&mut self, observable_error: Rc<dyn Error>) {
+    fn error(&mut self, observable_error: Arc<dyn Error + Send + Sync>) {
         if self.errored || (self.fused && self.completed) {
             return;
         }
@@ -85,12 +88,12 @@ impl<N> Observer for Subscriber<N> {
 pub enum SubscriptionHandle {
     Nil,
     JoinTask(JoinHandle<()>),
-    JoinThread(ThreadJoinHandle<()>)
+    JoinThread(ThreadJoinHandle<()>),
 }
 
 pub enum SubscriptionError {
     JoinTaskError(JoinError),
-    JoinThreadError(Box<dyn Any + Send>)
+    JoinThreadError(Box<dyn Any + Send>),
 }
 
 pub struct Subscription {
@@ -109,18 +112,31 @@ impl Subscription {
         }
     }
 
-    pub async fn join(self) -> Result<(), SubscriptionError> {
+    pub async fn join_thread_or_task(self) -> Result<(), Box<dyn Any + Send>> {
         match self.subscription_future {
             SubscriptionHandle::JoinTask(task_handle) => {
                 let r = task_handle.await;
-                return r.map_err(|e| SubscriptionError::JoinTaskError(e));
-            },
+                return r.map_err(|e| Box::new(e) as Box<dyn Any + Send>);
+            }
             SubscriptionHandle::JoinThread(thread_handle) => {
                 let r = thread_handle.join();
-                return r.map_err(|e| SubscriptionError::JoinThreadError(e));
-            },
+                return r.map_err(|e| e);
+            }
             SubscriptionHandle::Nil => {
                 return Ok(());
+            }
+        }
+    }
+
+    pub fn join_thread(self) -> Result<(), Box<dyn Any + Send>> {
+        match self.subscription_future {
+            SubscriptionHandle::JoinThread(thread_handle) => {
+                let r = thread_handle.join();
+                return r.map_err(|e| e);
+            }
+            SubscriptionHandle::Nil => Ok(()),
+            SubscriptionHandle::JoinTask(_) => {
+                panic!("handle should be OS thread handle but it is tokio task handle instead")
             }
         }
     }
@@ -147,7 +163,7 @@ impl Unsubscribeable for Subscription {
 pub enum UnsubscribeLogic {
     Nil,
     Wrapped(Box<Subscription>),
-    Logic(Box<dyn FnOnce() + Send + Sync>),
+    Logic(Box<dyn FnOnce() + Send>),
     Future(Pin<Box<dyn Future<Output = ()> + Send + Sync>>),
 }
 
@@ -173,4 +189,3 @@ impl UnsubscribeLogic {
         self
     }
 }
-

@@ -1,12 +1,16 @@
 use std::{
+    collections::VecDeque,
     error::Error,
-    rc::Rc,
-    sync::{Arc, Mutex}, collections::VecDeque, time::Instant,
+    sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use crate::{
     observer::Observer,
-    subscription::subscribe::{Subscribeable, Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle},
+    subscribe::Unsubscribeable,
+    subscription::subscribe::{
+        Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
+    },
 };
 
 struct EmittedValueEntry<T>(T, Instant);
@@ -23,7 +27,7 @@ impl<T> EmittedValueEntry<T> {
 
 pub enum BufSize {
     Infinity,
-    Fixed(usize)
+    Fixed(usize),
 }
 
 pub struct ReplaySubject<T> {
@@ -32,7 +36,9 @@ pub struct ReplaySubject<T> {
     values: VecDeque<EmittedValueEntry<T>>,
     observers: Vec<Subscriber<T>>,
     fused: bool,
+    completed: bool,
     closed: bool,
+    error: Option<Arc<dyn Error + Send + Sync>>,
 }
 
 impl<T: Send + Sync + 'static> ReplaySubject<T> {
@@ -43,7 +49,9 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
             values: VecDeque::new(),
             observers: Vec::with_capacity(16),
             fused: false,
+            completed: false,
             closed: false,
+            error: None,
         };
 
         match s.buf_size {
@@ -58,14 +66,19 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
         )
     }
 
-    pub fn new_time_aware(buf_size: BufSize, window_size: u128) -> (ReplaySubjectTx<T>, ReplaySubjectRx<T>) {
+    pub fn new_time_aware(
+        buf_size: BufSize,
+        window_size_ms: u128,
+    ) -> (ReplaySubjectTx<T>, ReplaySubjectRx<T>) {
         let mut s = ReplaySubject {
             buf_size,
-            window_size: Some(window_size),
+            window_size: Some(window_size_ms),
             values: VecDeque::new(),
             observers: Vec::with_capacity(16),
             fused: false,
+            completed: false,
             closed: false,
+            error: None,
         };
 
         match s.buf_size {
@@ -112,26 +125,39 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectRx<T> {
 
     fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
         if let Ok(mut src) = self.0.lock() {
+            // If ReplaySubject is unsubscribed `closed` flag is set. When closed
+            // ReplaySubject does not emit nor subscribes.
+            if src.closed {
+                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+            }
             if src.fused {
                 v.set_fused(true);
             }
             // If window_size is set remove outdated stored values from buffer.
             if let Some(window_size_ms) = src.window_size {
                 // Retain only fresh values in buffer.
-                println!("%%%%%%%%%%%%%%%%%%%%%%%%%%% {:?}", src.values.len());
                 src.values.retain(|e| e.is_fresh(window_size_ms));
-                println!("---------------- {:?}", src.values.len());
             }
 
-            // Subscriber emits stored values right away.
+            // Subscriber emits stored values right away. Values are emitted for new
+            // Subscribers even if ReplaySubject called complete() or error().
             for value in &src.values {
                 v.next((*value).0.clone());
             }
-            // If ReplaySubject is closed do not register new Subscriber.
-            if src.closed {
+            // If ReplaySubject is completed do not register new Subscriber.
+            if src.completed {
+                if let Some(err) = &src.error {
+                    // ReplaySubject completed with error. Call error() on
+                    // every subsequent Subscriber.
+                    v.error(Arc::clone(err));
+                } else {
+                    // ReplaySubject completed. Call complete() on
+                    // every subsequent Subscriber.
+                    v.complete();
+                }
                 return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
             }
-            // If ReplaySubject is not closed register new Subscriber.
+            // If ReplaySubject is not completed register new Subscriber.
             src.observers.push(v);
         } else {
             return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
@@ -142,10 +168,19 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectRx<T> {
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned.lock().unwrap().observers.clear();
-                // Maybe also mark ReplaySubject as closed?
+                // Maybe also mark ReplaySubject as completed?
             })),
             SubscriptionHandle::Nil,
         )
+    }
+}
+
+impl<T> Unsubscribeable for ReplaySubjectRx<T> {
+    fn unsubscribe(self) {
+        if let Ok(mut r) = self.0.lock() {
+            r.closed = true;
+            r.observers.clear();
+        }
     }
 }
 
@@ -154,7 +189,7 @@ impl<T: Clone> Observer for ReplaySubjectTx<T> {
 
     fn next(&mut self, v: Self::NextFnType) {
         if let Ok(mut src) = self.0.lock() {
-            if src.closed {
+            if src.completed || src.closed {
                 return;
             }
             match src.buf_size {
@@ -169,7 +204,7 @@ impl<T: Clone> Observer for ReplaySubjectTx<T> {
                         // Store new value in ReplaySubject at the end of the values buffer.
                         src.values.push_back(EmittedValueEntry::new(v.clone()));
                     }
-                },
+                }
             };
         } else {
             return;
@@ -181,28 +216,29 @@ impl<T: Clone> Observer for ReplaySubjectTx<T> {
         }
     }
 
-    fn error(&mut self, e: Rc<dyn Error>) {
+    fn error(&mut self, e: Arc<dyn Error + Send + Sync>) {
         if let Ok(mut src) = self.0.lock() {
-            if src.closed {
+            if src.completed || src.closed {
                 return;
             }
             for o in &mut src.observers {
                 o.error(e.clone());
             }
-            src.closed = true;
+            src.completed = true;
+            src.error = Some(e);
             src.observers.clear();
         }
     }
 
     fn complete(&mut self) {
         if let Ok(mut src) = self.0.lock() {
-            if src.closed {
+            if src.completed || src.closed {
                 return;
             }
             for o in &mut src.observers {
                 o.complete();
             }
-            src.closed = true;
+            src.completed = true;
             src.observers.clear();
         }
     }
@@ -215,32 +251,35 @@ impl<T: Clone + Send + 'static> From<ReplaySubjectTx<T>> for Subscriber<T> {
         let mut vc = value.clone();
         Subscriber::new(
             move |v| {
-                println!("IN FROM REPLAYSUBJECTTX {} ", Arc::strong_count(&vn.0));
                 vn.next(v);
             },
-            Some(move |e| {
-                ve.error(e)
-            }),
-            Some(move || {
-                println!("IN FROM COMPLETE REPLAYSUBJECTTX");
-                vc.complete()
-            })
+            Some(move |e| ve.error(e)),
+            Some(move || vc.complete()),
         )
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{sync::{Arc, Mutex}, error::Error, rc::Rc, time::Duration};
+    use std::{
+        error::Error,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
-    use crate::{subscribe::Subscriber, observer::Observer, Subscribeable, subjects::{ReplaySubject, BufSize}};
+    use crate::{
+        observer::Observer,
+        subjects::{BufSize, ReplaySubject},
+        subscribe::Subscriber,
+        Subscribeable,
+    };
 
     fn subject_value_registers() -> (
         Vec<impl FnOnce() -> Subscriber<i32>>,
         Arc<Mutex<Vec<i32>>>,
         Arc<Mutex<Vec<i32>>>,
-        Arc<Mutex<Vec<i32>>>) {
-
+        Arc<Mutex<Vec<i32>>>,
+    ) {
         let nexts: Vec<i32> = Vec::with_capacity(5);
         let nexts = Arc::new(Mutex::new(nexts));
         let nexts_c = Arc::clone(&nexts);
@@ -253,21 +292,25 @@ mod test {
         let errors = Arc::new(Mutex::new(errors));
         let errors_c = Arc::clone(&errors);
 
-        let make_subscriber = vec![move || {
-            Subscriber::new(
-                move |n| {
-                    // Track next() calls.
-                    nexts_c.lock().unwrap().push(n);
-                },
-                Some(move |_| {
-                    // Track error() calls.
-                    errors_c.lock().unwrap().push(1);
-                }),
-                Some(move || {
-                    // Track complete() calls.
-                    completes_c.lock().unwrap().push(1);
-                })
-        )}; 10];
+        let make_subscriber = vec![
+            move || {
+                Subscriber::new(
+                    move |n| {
+                        // Track next() calls.
+                        nexts_c.lock().unwrap().push(n);
+                    },
+                    Some(move |_| {
+                        // Track error() calls.
+                        errors_c.lock().unwrap().push(1);
+                    }),
+                    Some(move || {
+                        // Track complete() calls.
+                        completes_c.lock().unwrap().push(1);
+                    }),
+                )
+            };
+            10
+        ];
         (make_subscriber, nexts, completes, errors)
     }
 
@@ -280,7 +323,7 @@ mod test {
 
         // Emit but no registered subsribers yet, still store emitted value.
         stx.next(1);
-        
+
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 0);
         assert_eq!(nexts.lock().unwrap().last(), None);
@@ -352,7 +395,7 @@ mod test {
         let z = make_subscriber.pop().unwrap()();
 
         // Emit stored values upon subscribing even after complete.
-        srx.subscribe(z);
+        srx.subscribe(z); // 4th
 
         // Ignore emits after complete.
         stx.next(7);
@@ -361,7 +404,7 @@ mod test {
 
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 23); // 18 stored values + 5 stored values
-        assert_eq!(completes.lock().unwrap().len(), 3);
+        assert_eq!(completes.lock().unwrap().len(), 4);
         assert_eq!(errors.lock().unwrap().len(), 0);
     }
 
@@ -376,9 +419,9 @@ mod test {
         let (mut stx, mut srx) = ReplaySubject::new(BufSize::Infinity);
 
         // Register some subsribers.
-        srx.subscribe(x);
-        srx.subscribe(y);
-        srx.subscribe(z);
+        srx.subscribe(x); // 1st
+        srx.subscribe(y); // 2nd
+        srx.subscribe(z); // 3rd
 
         assert_eq!(srx.len(), 3);
         assert_eq!(nexts.lock().unwrap().len(), 0);
@@ -400,14 +443,14 @@ mod test {
 
         impl std::fmt::Display for MyErr {
             fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                   Ok(())
-               }   
+                Ok(())
+            }
         }
 
         impl Error for MyErr {}
 
         // Invoke error on a ReplaySubject.
-        stx.error(Rc::new(MyErr));
+        stx.error(Arc::new(MyErr));
 
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 9);
@@ -416,7 +459,7 @@ mod test {
 
         // Register another subscriber and emit some values after error.
         let z = make_subscriber.pop().unwrap()();
-        srx.subscribe(z);
+        srx.subscribe(z); // 4th
         stx.next(4);
         stx.next(5);
         stx.next(6);
@@ -424,7 +467,7 @@ mod test {
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 0);
-        assert_eq!(errors.lock().unwrap().len(), 3);
+        assert_eq!(errors.lock().unwrap().len(), 4);
     }
 
     #[test]
@@ -439,7 +482,7 @@ mod test {
         // Emit but no registered subsribers yet, still store emitted value.
         stx.next(1);
         stx.next(2);
-        
+
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 0);
         assert_eq!(nexts.lock().unwrap().last(), None);
@@ -502,7 +545,7 @@ mod test {
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 9);
         assert_eq!(nexts.lock().unwrap().last(), Some(&4));
-        assert_eq!(completes.lock().unwrap().len(), 3);
+        assert_eq!(completes.lock().unwrap().len(), 4);
         assert_eq!(errors.lock().unwrap().len(), 0);
     }
 
@@ -518,7 +561,7 @@ mod test {
         // Emit but no registered subsribers yet, still store emitted value.
         stx.next(1);
         stx.next(2);
-        
+
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 0);
         assert_eq!(nexts.lock().unwrap().last(), None);
@@ -566,14 +609,14 @@ mod test {
 
         impl std::fmt::Display for MyErr {
             fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                   Ok(())
-               }   
+                Ok(())
+            }
         }
 
         impl Error for MyErr {}
 
         // Invoke error on ReplaySubject.
-        stx.error(Rc::new(MyErr));
+        stx.error(Arc::new(MyErr));
 
         // These emits after error are ignored.
         stx.next(5);
@@ -593,7 +636,6 @@ mod test {
         assert_eq!(nexts.lock().unwrap().len(), 9);
         assert_eq!(nexts.lock().unwrap().last(), Some(&4));
         assert_eq!(completes.lock().unwrap().len(), 0);
-        assert_eq!(errors.lock().unwrap().len(), 3);
+        assert_eq!(errors.lock().unwrap().len(), 4);
     }
 }
-

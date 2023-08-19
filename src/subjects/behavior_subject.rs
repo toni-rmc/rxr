@@ -1,44 +1,50 @@
 use std::{
     error::Error,
-    rc::Rc,
     sync::{Arc, Mutex},
 };
 
 use crate::{
     observer::Observer,
-    subscription::subscribe::{Subscribeable, Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle},
+    subscribe::Unsubscribeable,
+    subscription::subscribe::{
+        Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
+    },
 };
 
-pub struct BehaviourSubject<T> {
+pub struct BehaviorSubject<T> {
     value: T,
     observers: Vec<Subscriber<T>>,
     fused: bool,
+    completed: bool,
     closed: bool,
+    error: Option<Arc<dyn Error + Send + Sync>>,
 }
 
-impl<T: Send + Sync + 'static> BehaviourSubject<T> {
-    pub fn new(value: T) -> (BehaviourSubjectTx<T>, BehaviourSubjectRx<T>) {
-        let s = Arc::new(Mutex::new(BehaviourSubject {
+impl<T: Send + Sync + 'static> BehaviorSubject<T> {
+    pub fn new(value: T) -> (BehaviorSubjectTx<T>, BehaviorSubjectRx<T>) {
+        let s = Arc::new(Mutex::new(BehaviorSubject {
             value,
             observers: Vec::with_capacity(15),
             fused: false,
+            completed: false,
             closed: false,
+            error: None,
         }));
 
         (
-            BehaviourSubjectTx(Arc::clone(&s)),
-            BehaviourSubjectRx(Arc::clone(&s)),
+            BehaviorSubjectTx(Arc::clone(&s)),
+            BehaviorSubjectRx(Arc::clone(&s)),
         )
     }
 }
 
 #[derive(Clone)]
-pub struct BehaviourSubjectRx<T>(Arc<Mutex<BehaviourSubject<T>>>);
+pub struct BehaviorSubjectRx<T>(Arc<Mutex<BehaviorSubject<T>>>);
 
 #[derive(Clone)]
-pub struct BehaviourSubjectTx<T>(Arc<Mutex<BehaviourSubject<T>>>);
+pub struct BehaviorSubjectTx<T>(Arc<Mutex<BehaviorSubject<T>>>);
 
-impl<T> BehaviourSubjectRx<T> {
+impl<T> BehaviorSubjectRx<T> {
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
@@ -58,7 +64,7 @@ impl<T> BehaviourSubjectRx<T> {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviourSubjectRx<T> {
+impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviorSubjectRx<T> {
     type ObsType = T;
 
     fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
@@ -69,7 +75,21 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviourSubjectRx<T> {
             if src.fused {
                 v.set_fused(true);
             }
-            // Subscriber emits stored value right away when being registered.
+            // If BehaviorSubject is completed do not register new Subscriber.
+            if src.completed {
+                if let Some(err) = &src.error {
+                    // BehaviorSubject completed with error. Call error() on
+                    // every subsequent Subscriber.
+                    v.error(Arc::clone(err));
+                } else {
+                    // BehaviorSubject completed. Call complete() on
+                    // every subsequent Subscriber.
+                    v.complete();
+                }
+                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+            }
+            // Subscriber emits stored value right away when being registered unless
+            // BehaviorSubject invoked complete(), error() or unsubscribe().
             v.next(src.value.clone());
             src.observers.push(v);
         } else {
@@ -81,87 +101,100 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviourSubjectRx<T> {
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned.lock().unwrap().observers.clear();
-                // Maybe also mark BehaviourSubject as closed?
+                // Maybe also mark BehaviorSubject as completed?
             })),
             SubscriptionHandle::Nil,
         )
     }
 }
 
-impl<T: Clone> Observer for BehaviourSubjectTx<T> {
+impl<T> Unsubscribeable for BehaviorSubjectRx<T> {
+    fn unsubscribe(self) {
+        if let Ok(mut r) = self.0.lock() {
+            r.closed = true;
+            r.observers.clear();
+        }
+    }
+}
+
+impl<T: Clone> Observer for BehaviorSubjectTx<T> {
     type NextFnType = T;
 
     fn next(&mut self, v: Self::NextFnType) {
-        if self.0.lock().unwrap().closed {
+        if let Ok(src) = self.0.lock() {
+            if src.completed || src.closed {
+                return;
+            }
+        } else {
             return;
         }
-        // Store new value in BehaviourSubject.
+        // Store new value in BehaviorSubject.
         self.0.lock().unwrap().value = v.clone();
         for o in &mut self.0.lock().unwrap().observers {
             o.next(v.clone());
         }
     }
 
-    fn error(&mut self, e: Rc<dyn Error>) {
+    fn error(&mut self, e: Arc<dyn Error + Send + Sync>) {
         if let Ok(mut src) = self.0.lock() {
-            if src.closed {
+            if src.completed || src.closed {
                 return;
             }
             for o in &mut src.observers {
                 o.error(e.clone());
             }
-            src.closed = true;
+            src.completed = true;
+            src.error = Some(e);
             src.observers.clear();
         }
     }
 
     fn complete(&mut self) {
         if let Ok(mut src) = self.0.lock() {
-            if src.closed {
+            if src.completed || src.closed {
                 return;
             }
             for o in &mut src.observers {
                 o.complete();
             }
-            src.closed = true;
+            src.completed = true;
             src.observers.clear();
         }
     }
 }
 
-impl<T: Clone + Send + 'static> From<BehaviourSubjectTx<T>> for Subscriber<T> {
-    fn from(value: BehaviourSubjectTx<T>) -> Self {
+impl<T: Clone + Send + 'static> From<BehaviorSubjectTx<T>> for Subscriber<T> {
+    fn from(value: BehaviorSubjectTx<T>) -> Self {
         let mut vn = value.clone();
         let mut ve = value.clone();
         let mut vc = value.clone();
         Subscriber::new(
             move |v| {
-                println!("IN FROM REPLAYSUBJECTTX {} ", Arc::strong_count(&vn.0));
                 vn.next(v);
             },
-            Some(move |e| {
-                ve.error(e)
-            }),
-            Some(move || {
-                println!("IN FROM COMPLETE REPLAYSUBJECTTX");
-                vc.complete()
-            })
+            Some(move |e| ve.error(e)),
+            Some(move || vc.complete()),
         )
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::{sync::{Arc, Mutex}, error::Error, rc::Rc};
+    use std::{
+        error::Error,
+        sync::{Arc, Mutex},
+    };
 
-    use crate::{subscribe::Subscriber, observer::Observer, Subscribeable, subjects::BehaviourSubject};
+    use crate::{
+        observer::Observer, subjects::BehaviorSubject, subscribe::Subscriber, Subscribeable,
+    };
 
     fn subject_value_registers() -> (
         Vec<impl FnOnce() -> Subscriber<i32>>,
         Arc<Mutex<Vec<i32>>>,
         Arc<Mutex<Vec<i32>>>,
-        Arc<Mutex<Vec<i32>>>) {
-
+        Arc<Mutex<Vec<i32>>>,
+    ) {
         let nexts: Vec<i32> = Vec::with_capacity(5);
         let nexts = Arc::new(Mutex::new(nexts));
         let nexts_c = Arc::clone(&nexts);
@@ -174,34 +207,38 @@ mod test {
         let errors = Arc::new(Mutex::new(errors));
         let errors_c = Arc::clone(&errors);
 
-        let make_subscriber = vec![move || {
-            Subscriber::new(
-                move |n| {
-                    // Track next() calls.
-                    nexts_c.lock().unwrap().push(n);
-                },
-                Some(move |_| {
-                    // Track error() calls.
-                    errors_c.lock().unwrap().push(1);
-                }),
-                Some(move || {
-                    // Track complete() calls.
-                    completes_c.lock().unwrap().push(1);
-                })
-        )}; 10];
+        let make_subscriber = vec![
+            move || {
+                Subscriber::new(
+                    move |n| {
+                        // Track next() calls.
+                        nexts_c.lock().unwrap().push(n);
+                    },
+                    Some(move |_| {
+                        // Track error() calls.
+                        errors_c.lock().unwrap().push(1);
+                    }),
+                    Some(move || {
+                        // Track complete() calls.
+                        completes_c.lock().unwrap().push(1);
+                    }),
+                )
+            };
+            10
+        ];
         (make_subscriber, nexts, completes, errors)
     }
 
     #[test]
-    fn behaviour_subject_emit_than_complete() {
+    fn behavior_subject_emit_than_complete() {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = BehaviourSubject::new(9);
+        let (mut stx, mut srx) = BehaviorSubject::new(9);
 
         // Emit but no registered subsribers yet.
         stx.next(1);
-        
+
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 0);
         assert_eq!(nexts.lock().unwrap().last(), None);
@@ -268,14 +305,14 @@ mod test {
 
         // Register another subscriber and emit some values after complete.
         let z = make_subscriber.pop().unwrap()();
-        srx.subscribe(z);
+        srx.subscribe(z); // 4th
         stx.next(7);
         stx.next(8);
         stx.next(9);
 
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 12);
-        assert_eq!(completes.lock().unwrap().len(), 3);
+        assert_eq!(completes.lock().unwrap().len(), 4);
         assert_eq!(errors.lock().unwrap().len(), 0);
     }
 
@@ -287,12 +324,12 @@ mod test {
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
 
-        let (mut stx, mut srx) = BehaviourSubject::new(1);
+        let (mut stx, mut srx) = BehaviorSubject::new(1);
 
         // Register some subsribers and emit stored values.
-        srx.subscribe(x);
-        srx.subscribe(y);
-        srx.subscribe(z);
+        srx.subscribe(x); // 1st
+        srx.subscribe(y); // 2nd
+        srx.subscribe(z); // 3rd
 
         assert_eq!(srx.len(), 3);
         assert_eq!(nexts.lock().unwrap().len(), 3);
@@ -314,14 +351,14 @@ mod test {
 
         impl std::fmt::Display for MyErr {
             fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                   Ok(())
-               }   
+                Ok(())
+            }
         }
 
         impl Error for MyErr {}
 
         // Invoke error on a Subject.
-        stx.error(Rc::new(MyErr));
+        stx.error(Arc::new(MyErr));
 
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 12);
@@ -330,7 +367,7 @@ mod test {
 
         // Register another subscriber and emit some values after error.
         let z = make_subscriber.pop().unwrap()();
-        srx.subscribe(z);
+        srx.subscribe(z); // 4th
         stx.next(4);
         stx.next(5);
         stx.next(6);
@@ -338,6 +375,6 @@ mod test {
         assert_eq!(srx.len(), 0);
         assert_eq!(nexts.lock().unwrap().len(), 12);
         assert_eq!(completes.lock().unwrap().len(), 0);
-        assert_eq!(errors.lock().unwrap().len(), 3);
+        assert_eq!(errors.lock().unwrap().len(), 4);
     }
 }
