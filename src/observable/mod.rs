@@ -162,7 +162,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         i += 1;
                         o_shared.lock().unwrap().next(v);
                     } else if !signal_sent {
-                        let tx = tx.clone();
+                        // let tx = tx.clone();
                         signal_sent = true;
                         // std::thread::spawn(move || {
                         // println!("Send >>>>>>>>>>>>>>>");

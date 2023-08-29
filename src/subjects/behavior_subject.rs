@@ -121,15 +121,15 @@ impl<T: Clone> Observer for BehaviorSubjectTx<T> {
     type NextFnType = T;
 
     fn next(&mut self, v: Self::NextFnType) {
-        if let Ok(src) = self.0.lock() {
+        if let Ok(mut src) = self.0.lock() {
             if src.completed || src.closed {
                 return;
             }
+            // Store new value in BehaviorSubject.
+            src.value = v.clone();
         } else {
             return;
         }
-        // Store new value in BehaviorSubject.
-        self.0.lock().unwrap().value = v.clone();
         for o in &mut self.0.lock().unwrap().observers {
             o.next(v.clone());
         }
@@ -236,7 +236,7 @@ mod test {
         let x = make_subscriber.pop().unwrap()();
         let (mut stx, mut srx) = BehaviorSubject::new(9);
 
-        // Emit but no registered subsribers yet.
+        // Emit but no registered subscribers yet.
         stx.next(1);
 
         assert_eq!(srx.len(), 0);
@@ -245,7 +245,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber and emit stored value.
+        // Register subscriber and emit stored value.
         srx.subscribe(x); // 1st
 
         assert_eq!(srx.len(), 1);
@@ -273,7 +273,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register more subsribers.
+        // Register more subscribers.
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
         srx.subscribe(y); // 2nd
@@ -285,7 +285,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Emit two more times on 3 registered subsribers.
+        // Emit two more times on 3 registered subscribers.
         stx.next(5);
         stx.next(6);
 
@@ -295,7 +295,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Complete Subject.
+        // Complete BehaviorSubject.
         stx.complete();
 
         assert_eq!(srx.len(), 0);
@@ -326,7 +326,7 @@ mod test {
 
         let (mut stx, mut srx) = BehaviorSubject::new(1);
 
-        // Register some subsribers and emit stored values.
+        // Register some subscribers and emit stored values.
         srx.subscribe(x); // 1st
         srx.subscribe(y); // 2nd
         srx.subscribe(z); // 3rd
@@ -357,7 +357,7 @@ mod test {
 
         impl Error for MyErr {}
 
-        // Invoke error on a Subject.
+        // Invoke error on a BehaviorSubject.
         stx.error(Arc::new(MyErr));
 
         assert_eq!(srx.len(), 0);

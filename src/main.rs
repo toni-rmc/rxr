@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use rxr::*;
 
-use rxr::subjects::{BehaviorSubject, ReplaySubject, BufSize};
+use rxr::subjects::{BehaviorSubject, ReplaySubject, BufSize, AsyncSubject};
 use rxr::subscribe::{Subscriber, Subscription, UnsubscribeLogic, SubscriptionHandle, Unsubscribeable};
 use tokio::sync::mpsc::channel;
 use tokio::time::{sleep, Duration};
@@ -223,7 +223,7 @@ async fn main() {
 
     impl Error for MyErr {}
 
-    let (mut stx, mut srx) = Subject::new();
+    let (mut stx, mut srx) = AsyncSubject::new();
 
     stx.next("100009".to_string());
 
@@ -254,11 +254,22 @@ async fn main() {
 
     // let srx = srx.fuse();
 
-    stx.next("1".to_string());
+    // stx.next("1".to_string());
 
     let mut test_subject_as_subscriber = baz("sas".to_string(), |_| {});
-    stx.next(19.to_string());
-    stx.next(190.to_string());
+    // stx.next(19.to_string());
+    // stx.next(190.to_string());
+    
+    let mut stx_thread = stx.clone();
+    let srx_thread = srx.clone();
+    std::thread::spawn(move || {
+       // stx_thread.next("-> 988".to_string());
+        // let _ = std::thread::sleep(Duration::from_millis(5));
+        stx_thread.complete();
+    });
+
+    // let _ = sleep(Duration::from_millis(5)).await;
+
     // subscr.unsubscribe();
     stx.complete();
     //stx.error(Arc::new(MyErr(8)));

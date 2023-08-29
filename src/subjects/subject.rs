@@ -224,7 +224,7 @@ mod test {
         let x = make_subscriber.pop().unwrap()();
         let (mut stx, mut srx) = Subject::new();
 
-        // Emit but no registered subsribers yet.
+        // Emit but no registered subscribers yet.
         stx.next(1);
 
         assert_eq!(srx.len(), 0);
@@ -232,7 +232,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber.
+        // Register subscriber.
         srx.subscribe(x); // 1st
 
         // Registered but nothing is emitted after.
@@ -258,7 +258,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register more subsribers.
+        // Register more subscribers.
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
         srx.subscribe(y); // 2nd
@@ -269,7 +269,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Emit two more times on 3 registered subsribers.
+        // Emit two more times on 3 registered subscribers.
         stx.next(5);
         stx.next(6);
 
@@ -309,7 +309,7 @@ mod test {
 
         let (mut stx, mut srx) = Subject::new();
 
-        // Register some subsribers.
+        // Register some subscribers.
         srx.subscribe(x); // 1st
         srx.subscribe(y); // 2nd
         srx.subscribe(z); // 3rd

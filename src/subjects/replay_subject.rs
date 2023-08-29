@@ -321,7 +321,7 @@ mod test {
         let x = make_subscriber.pop().unwrap()();
         let (mut stx, mut srx) = ReplaySubject::new(BufSize::Fixed(5));
 
-        // Emit but no registered subsribers yet, still store emitted value.
+        // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);
 
         assert_eq!(srx.len(), 0);
@@ -330,7 +330,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber and emit stored value.
+        // Register subscriber and emit stored value.
         srx.subscribe(x); // 1st
 
         assert_eq!(srx.len(), 1);
@@ -358,7 +358,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register more subsribers and emit all stored values when registered.
+        // Register more subscribers and emit all stored values when registered.
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
         srx.subscribe(y); // 2nd
@@ -370,10 +370,10 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Emit again on 3 registered subsribers and store emitted value.
+        // Emit again on 3 registered subscribers and store emitted value.
         stx.next(5);
 
-        // Emit again on 3 registered subsribers and store emitted value
+        // Emit again on 3 registered subscribers and store emitted value
         // but this time buffer is full so remove oldest stored value from value buffer.
         stx.next(6);
 
@@ -418,7 +418,7 @@ mod test {
 
         let (mut stx, mut srx) = ReplaySubject::new(BufSize::Infinity);
 
-        // Register some subsribers.
+        // Register some subscribers.
         srx.subscribe(x); // 1st
         srx.subscribe(y); // 2nd
         srx.subscribe(z); // 3rd
@@ -479,7 +479,7 @@ mod test {
         // Initialize ReplaySubject with time aware value buffer.
         let (mut stx, mut srx) = ReplaySubject::new_time_aware(BufSize::Fixed(10), 500);
 
-        // Emit but no registered subsribers yet, still store emitted value.
+        // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);
         stx.next(2);
 
@@ -489,7 +489,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber and emit stored value.
+        // Register subscriber and emit stored value.
         srx.subscribe(x); // 1st
 
         assert_eq!(srx.len(), 1);
@@ -501,7 +501,7 @@ mod test {
         // Wait for some time to let time aware ReplaySubject removes old values from the buffer.
         std::thread::sleep(Duration::from_millis(700));
 
-        // Register more subsribers. No emits should occur because previosly
+        // Register more subscribers. No emits should occur because previosly
         // registered values are outdated.
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
@@ -558,7 +558,7 @@ mod test {
         // Initialize ReplaySubject with time aware value buffer.
         let (mut stx, mut srx) = ReplaySubject::new_time_aware(BufSize::Fixed(10), 500);
 
-        // Emit but no registered subsribers yet, still store emitted value.
+        // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);
         stx.next(2);
 
@@ -568,7 +568,7 @@ mod test {
         assert_eq!(completes.lock().unwrap().len(), 0);
         assert_eq!(errors.lock().unwrap().len(), 0);
 
-        // Register subsriber and emit stored value.
+        // Register subscriber and emit stored value.
         srx.subscribe(x); // 1st
 
         assert_eq!(srx.len(), 1);
@@ -580,7 +580,7 @@ mod test {
         // Wait for some time to let time aware ReplaySubject removes old values from the buffer.
         std::thread::sleep(Duration::from_millis(700));
 
-        // Register more subsribers. No emits should occur because previosly
+        // Register more subscribers. No emits should occur because previosly
         // registered values are outdated.
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
