@@ -1,6 +1,6 @@
 use std::{
     error::Error,
-    sync::{Arc, Mutex}
+    sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -8,73 +8,224 @@ use crate::{
     subscribe::Unsubscribeable,
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
-    },
+    }, Observable,
 };
 
+/// A specialized `Subject` variant emits its latest value to observers upon completion.
+///
+/// `AsyncSubject` captures and broadcasts the last emitted value from a source
+/// observable, but this broadcasting occurs only after the source observable
+/// completes. It sends this value to all new subscriptions.
+///
+/// If an error is invoked in the source observable, the `AsyncSubject` will not emit
+/// the latest value to subscriptions. Instead, it propagates the error notification
+/// from the source `Observable` to all subscriptions. This ensures that existing and
+/// new subscriptions are properly informed about the error, maintaining consistent
+/// error handling across observers.
+///
+/// In `rxr`, this type is primarily used for calling its `emitter_receiver` function,
+/// and then you use the returned [`AsyncSubjectEmitter`] to emit values, while
+/// using [`AsyncSubjectReceiver`] to subscribe to those values.
+///
+/// [`AsyncSubjectEmitter`]: struct.AsyncSubjectEmitter.html
+/// [`AsyncSubjectReceiver`]: struct.AsyncSubjectReceiver.html
+///
+/// # Examples
+///
+/// AsyncSubject completion
+///
+///```no_run
+/// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
+/// use rxr::{ObservableExt, Observer, Subscribeable};
+/// 
+/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+///     Subscriber::new(
+///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
+///         Some(|_| eprintln!("Error")),
+///         Some(move || println!("Completed {}", subscriber_id)),
+///     )
+/// }
+/// 
+/// // Initialize a `AsyncSubject` and obtain its emitter and receiver.
+/// let (mut emitter, mut receiver) = AsyncSubject::emitter_receiver();
+///
+/// // Registers `Subscriber` 1.
+/// receiver.subscribe(create_subscriber(1));
+///
+/// emitter.next(101); // Stores 101 ast the latest value.
+/// emitter.next(102); // Latest value is now 102.
+///
+/// // All Observable operators can be applied to the receiver.
+/// // Registers mapped `Subscriber` 2.
+/// receiver
+///     .clone() // Shallow clone: clones only the pointer to the `AsyncSubject`.
+///     .map(|v| format!("mapped {}", v))
+///     .subscribe(Subscriber::new(
+///         move |v| println!("Subscriber #2 emitted: {}", v),
+///         Some(|_| eprintln!("Error")),
+///         Some(|| println!("Completed 2")),
+///     ));
+///
+/// // Registers `Subscriber` 3.
+/// receiver.subscribe(create_subscriber(3));
+///
+/// emitter.next(103); // Latest value is now 103.
+///
+/// // Emits latest value (103) to registered `Subscriber`'s 1, 2 and 3 and calls
+/// // `complete` on each of them.
+/// emitter.complete();
+///
+/// // Subscriber 4: post-completion subscribe, emits latest value (103) and completes.
+/// receiver.subscribe(create_subscriber(4));
+///
+/// emitter.next(104); // Called post-completion, does not emit.
+///```
+///
+/// AsyncSubject error
+///
+///```no_run
+/// use std::error::Error;
+/// use std::fmt::Display;
+/// use std::sync::Arc;
+/// 
+/// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
+/// use rxr::{ObservableExt, Observer, Subscribeable};
+/// 
+/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+///     Subscriber::new(
+///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
+///         Some(move |e| eprintln!("Error: {} {}", e, subscriber_id)),
+///         Some(|| println!("Completed")),
+///     )
+/// }
+/// 
+/// #[derive(Debug)]
+/// struct AsyncSubjectError(String);
+/// 
+/// impl Display for AsyncSubjectError {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         write!(f, "{}", self.0)
+///     }
+/// }
+/// 
+/// impl Error for AsyncSubjectError {}
+/// 
+/// // Initialize a `AsyncSubject` and obtain its emitter and receiver.
+/// let (mut emitter, mut receiver) = AsyncSubject::emitter_receiver();
+///
+/// // Registers `Subscriber` 1.
+/// receiver.subscribe(create_subscriber(1));
+///
+/// emitter.next(101); // Stores 101 ast the latest value.
+/// emitter.next(102); // Latest value is now 102.
+///
+/// // All Observable operators can be applied to the receiver.
+/// // Registers mapped `Subscriber` 2.
+/// receiver
+///     .clone() // Shallow clone: clones only the pointer to the `AsyncSubject`.
+///     .map(|v| format!("mapped {}", v))
+///     .subscribe(Subscriber::new(
+///         move |v| println!("Subscriber #2 emitted: {}", v),
+///         Some(|e| eprintln!("Error: {} 2", e)),
+///         Some(|| println!("Completed")),
+///     ));
+///
+/// // Registers `Subscriber` 3.
+/// receiver.subscribe(create_subscriber(3));
+///
+/// emitter.next(103); // Latest value is now 103.
+///
+/// // Calls `error` on registered `Subscriber`'s 1, 2 and 3.
+/// emitter.error(Arc::new(AsyncSubjectError(
+///     "AsyncSubject error".to_string(),
+/// )));
+///
+/// // Subscriber 4: subscribed after subject's error call; emits error and
+/// // does not emit further.
+/// receiver.subscribe(create_subscriber(4));
+///
+/// emitter.next(104); // Called post-completion, does not emit.
+///```
 pub struct AsyncSubject<T> {
     value: Option<T>,
-    observers: Vec<Subscriber<T>>,
-    fused: bool,
+    observers: Vec<(u64, Subscriber<T>)>,
+    // fused: bool,
     completed: bool,
     closed: bool,
     error: Option<Arc<dyn Error + Send + Sync>>,
 }
 
 impl<T: Send + Sync + 'static> AsyncSubject<T> {
-    pub fn new() -> (AsyncSubjectTx<T>, AsyncSubjectRx<T>) {
+    /// Initializes an `AsyncSubject` and returns a tuple containing an
+    /// `AsyncSubjectEmitter` for emitting values and an `AsyncSubjectReceiver`
+    /// for subscribing to emitted values.
+    pub fn emitter_receiver() -> (AsyncSubjectEmitter<T>, AsyncSubjectReceiver<T>) {
         let s = Arc::new(Mutex::new(AsyncSubject {
             value: None,
-            observers: Vec::with_capacity(15),
-            fused: false,
+            observers: Vec::with_capacity(16),
+            // fused: false,
             completed: false,
             closed: false,
             error: None,
         }));
 
         (
-            AsyncSubjectTx(Arc::clone(&s)),
-            AsyncSubjectRx(Arc::clone(&s)),
+            AsyncSubjectEmitter(Arc::clone(&s)),
+            AsyncSubjectReceiver(Arc::clone(&s)),
         )
     }
 }
 
+/// Subscription handler for `AsyncSubject`.
+///
+/// `AsyncSubjectReceiver` acts as an `Observable`, allowing you to utilize its
+/// `subscribe` method for receiving emissions from the `AsyncSubject`'s multicasting.
+/// You can also employ its `unsubscribe` method to close the `AsyncSubject` and
+/// remove registered observers.
 #[derive(Clone)]
-pub struct AsyncSubjectRx<T>(Arc<Mutex<AsyncSubject<T>>>);
+pub struct AsyncSubjectReceiver<T>(Arc<Mutex<AsyncSubject<T>>>);
 
+// Multicasting emitter for `AsyncSubject`.
+/// 
+/// `AsyncSubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
+/// `error`, and `complete` methods for multicasting emissions to all registered
+/// observers within the `AsyncSubject`.
 #[derive(Clone)]
-pub struct AsyncSubjectTx<T>(Arc<Mutex<AsyncSubject<T>>>);
+pub struct AsyncSubjectEmitter<T>(Arc<Mutex<AsyncSubject<T>>>);
 
-impl<T> AsyncSubjectRx<T> {
+impl<T> AsyncSubjectReceiver<T> {
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
-    pub fn fuse(self) -> Self {
-        for o in &mut self.0.lock().unwrap().observers {
-            o.set_fused(true);
-        }
-        self
-    }
+    // pub(crate) fn fuse(self) -> Self {
+    //     for (_, o) in &mut self.0.lock().unwrap().observers {
+    //         o.set_fused(true);
+    //     }
+    //     self
+    // }
 
-    pub fn defuse(self) -> Self {
-        for o in &mut self.0.lock().unwrap().observers {
-            o.set_fused(false);
-        }
-        self
-    }
+    // pub(crate) fn defuse(self) -> Self {
+    //     for (_, o) in &mut self.0.lock().unwrap().observers {
+    //         o.set_fused(false);
+    //     }
+    //     self
+    // }
 }
 
-impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectRx<T> {
+impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectReceiver<T> {
     type ObsType = T;
 
-        fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
+    fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
+        let key: u64 = super::gen_key().next().unwrap_or(super::random_seed());
+
         if let Ok(mut src) = self.0.lock() {
             if src.closed {
                 return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
             }
-            if src.fused {
-                v.set_fused(true);
-            }
+            // if src.fused {
+            //     v.set_fused(true);
+            // }
             // If AsyncSubject is completed do not register new Subscriber.
             if src.completed {
                 if let Some(err) = &src.error {
@@ -92,7 +243,7 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectRx<T> {
                 return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
             }
             // Register Subscriber.
-            src.observers.push(v);
+            src.observers.push((key, v));
         } else {
             return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
         };
@@ -101,15 +252,14 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectRx<T> {
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                source_cloned.lock().unwrap().observers.clear();
-                // Maybe also mark AsyncSubject as completed?
+                source_cloned.lock().unwrap().observers.retain(move |v| v.0 != key);
             })),
             SubscriptionHandle::Nil,
         )
     }
 }
 
-impl<T> Unsubscribeable for AsyncSubjectRx<T> {
+impl<T> Unsubscribeable for AsyncSubjectReceiver<T> {
     fn unsubscribe(self) {
         if let Ok(mut r) = self.0.lock() {
             r.closed = true;
@@ -118,7 +268,7 @@ impl<T> Unsubscribeable for AsyncSubjectRx<T> {
     }
 }
 
-impl<T: Clone> Observer for AsyncSubjectTx<T> {
+impl<T: Clone> Observer for AsyncSubjectEmitter<T> {
     type NextFnType = T;
 
     fn next(&mut self, v: Self::NextFnType) {
@@ -127,7 +277,7 @@ impl<T: Clone> Observer for AsyncSubjectTx<T> {
                 return;
             }
             // Store new value in AsyncSubject.
-            src.value = Some(v.clone());
+            src.value = Some(v);
         }
     }
 
@@ -136,7 +286,7 @@ impl<T: Clone> Observer for AsyncSubjectTx<T> {
             if src.completed || src.closed {
                 return;
             }
-            for o in &mut src.observers {
+            for (_, o) in &mut src.observers {
                 o.error(e.clone());
             }
             src.completed = true;
@@ -153,30 +303,37 @@ impl<T: Clone> Observer for AsyncSubjectTx<T> {
             src.completed = true;
             if let Some(value) = &src.value {
                 let v = value.clone();
-                for observer in &mut src.observers {
-                    observer.next(v.clone());
+                for (_, o) in &mut src.observers {
+                    o.next(v.clone());
                 }
             }
-            for observer in &mut src.observers {
-                observer.complete();
+            for (_, o) in &mut src.observers {
+                o.complete();
             }
             src.observers.clear();
         }
     }
 }
 
-impl<T: Clone + Send + 'static> From<AsyncSubjectTx<T>> for Subscriber<T> {
-    fn from(value: AsyncSubjectTx<T>) -> Self {
+impl<T: Clone + Send + 'static> From<AsyncSubjectEmitter<T>> for Subscriber<T> {
+    fn from(mut value: AsyncSubjectEmitter<T>) -> Self {
         let mut vn = value.clone();
         let mut ve = value.clone();
-        let mut vc = value.clone();
         Subscriber::new(
             move |v| {
                 vn.next(v);
             },
             Some(move |e| ve.error(e)),
-            Some(move || vc.complete()),
+            Some(move || value.complete()),
         )
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> From<AsyncSubjectReceiver<T>> for Observable<T> {
+    fn from(mut value: AsyncSubjectReceiver<T>) -> Self {
+        Observable::new(move |subscriber| {
+            value.subscribe(subscriber)
+        })
     }
 }
 
@@ -187,7 +344,7 @@ mod test {
         sync::{Arc, Mutex},
     };
 
-    use crate::{observer::Observer, subscribe::Subscriber, subjects::AsyncSubject, Subscribeable};
+    use crate::{observer::Observer, subjects::AsyncSubject, subscribe::Subscriber, Subscribeable};
 
     fn subject_value_registers() -> (
         Vec<impl FnOnce() -> Subscriber<i32>>,
@@ -245,7 +402,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = AsyncSubject::new();
+        let (mut stx, mut srx) = AsyncSubject::emitter_receiver();
 
         // Store first value in AsyncSubject.
         stx.next(1);
@@ -318,7 +475,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = AsyncSubject::new();
+        let (mut stx, mut srx) = AsyncSubject::emitter_receiver();
 
         // Register subscriber.
         srx.subscribe(x); // 1st
@@ -363,7 +520,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = AsyncSubject::new();
+        let (mut stx, mut srx) = AsyncSubject::emitter_receiver();
 
         // Store first value in AsyncSubject.
         stx.next(1);
@@ -436,7 +593,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = AsyncSubject::new();
+        let (mut stx, mut srx) = AsyncSubject::emitter_receiver();
 
         // Register subscriber.
         srx.subscribe(x); // 1st
@@ -476,4 +633,3 @@ mod test {
         assert_eq!(errors.lock().unwrap().len(), 4);
     }
 }
-

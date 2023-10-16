@@ -8,70 +8,212 @@ use crate::{
     subscribe::Unsubscribeable,
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
-    },
+    }, Observable,
 };
 
+/// A `Subject` represents a unique variant of an `Observable` that enables
+/// multicasting values to multiple `Observers`.
+///
+/// Unlike regular `Observables`, which are unicast (each subscribed `Observer` has
+/// its independent execution of the `Observable`), `Subjects` are multicast.
+///
+/// If an error is encountered in the source observable, `Subject` will not emit any
+/// items to future subscriptions. Instead, it will just pass along the error
+/// notification from the source observable to these new subscriptions.
+///
+/// In `rxr`, you use the `Subject` type by invoking its `emitter_receiver` function
+/// to get a [`SubjectEmitter`] for emitting values and a [`SubjectReceiver`] for
+/// subscribing to emitted values.
+///
+/// [`SubjectEmitter`]: struct.SubjectEmitter.html
+/// [`SubjectReceiver`]: struct.SubjectReceiver.html
+///
+/// # Examples
+///
+/// Subject completion
+///
+///```no_run
+/// use rxr::{subjects::Subject, subscribe::Subscriber};
+/// use rxr::{ObservableExt, Observer, Subscribeable};
+/// 
+/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+///     Subscriber::new(
+///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
+///         Some(|_| eprintln!("Error")),
+///         Some(move || println!("Completed {}", subscriber_id)),
+///     )
+/// }
+/// 
+/// // Initialize a `Subject` and obtain its emitter and receiver.
+/// let (mut emitter, mut receiver) = Subject::emitter_receiver();
+///
+/// // Registers `Subscriber` 1.
+/// receiver.subscribe(create_subscriber(1));
+///
+/// emitter.next(101); // Emits 101 to registered `Subscriber` 1.
+/// emitter.next(102); // Emits 102 to registered `Subscriber` 1.
+///
+/// // All Observable operators can be applied to the receiver.
+/// // Registers mapped `Subscriber` 2.
+/// receiver
+///     .clone() // Shallow clone: clones only the pointer to the `Subject`.
+///     .map(|v| format!("mapped {}", v))
+///     .subscribe(Subscriber::new(
+///         move |v| println!("Subscriber #2 emitted: {}", v),
+///         Some(|_| eprintln!("Error")),
+///         Some(|| println!("Completed 2")),
+///     ));
+///
+/// // Registers `Subscriber` 3.
+/// receiver.subscribe(create_subscriber(3));
+///
+/// emitter.next(103); // Emits 103 to registered `Subscriber`'s 1, 2 and 3.
+///
+/// emitter.complete(); // Calls `complete` on registered `Subscriber`'s 1, 2 and 3.
+///
+/// // Subscriber 4: post-completion subscribe, completes immediately.
+/// receiver.subscribe(create_subscriber(4));
+///
+/// emitter.next(104); // Called post-completion, does not emit.
+///```
+///
+/// Utilizing a Subject as an Observer. This can be done with any variant of Subject.
+///
+///```no_run
+/// use std::time::Duration;
+/// 
+/// use rxr::{
+///     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
+///     Observable, ObservableExt, Observer, Subject, Subscribeable,
+/// };
+/// 
+/// // Make an Observable.
+/// let mut o = Observable::new(move |mut o: Subscriber<_>| {
+///     for i in 0..=10 {
+///         o.next(i);
+///         std::thread::sleep(Duration::from_millis(1));
+///     }
+///     o.complete();
+///
+///     Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
+/// });
+///
+/// // Initialize a `Subject` and obtain its emitter and receiver.
+/// let (emitter, mut receiver) = Subject::emitter_receiver();
+///
+/// // Register `Subscriber` 1.
+/// receiver.subscribe(Subscriber::new(
+///     |v| println!("Subscriber 1: {}", v),
+///     Some(|e| eprintln!("Error 1: {}", e)),
+///     Some(|| println!("Completed Subscriber 1")),
+/// ));
+///
+/// // Register `Subscriber` 2.
+/// receiver
+///     // We're cloning the receiver so we can use it again.
+///     // Shallow clone: clones only the pointer to the `Subject`.
+///     .clone()
+///     .take(7) // For performance, prioritize placing `take()` as the first operator.
+///     .delay(1000)
+///     .map(|v| format!("mapped {}", v))
+///     .subscribe(Subscriber::new(
+///         |v| println!("Subscriber 2: {}", v),
+///         Some(|e| eprintln!("Error 2: {}", e)),
+///         Some(|| println!("Completed Subscriber 2")),
+///     ));
+///
+/// // Register `Subscriber` 3.
+/// receiver
+///     .filter(|v| v % 2 == 0)
+///     .map(|v| format!("filtered {}", v))
+///     .subscribe(Subscriber::new(
+///         |v| println!("Subscriber 3: {}", v),
+///         Some(|e| eprintln!("Error 3: {}", e)),
+///         Some(|| println!("Completed Subscriber 3")),
+///     ));
+///
+/// // Convert the emitter into an observer and subscribe it to the observable.
+/// o.subscribe(emitter.into());
+///```
 pub struct Subject<T> {
-    observers: Vec<Subscriber<T>>,
-    fused: bool,
+    observers: Vec<(u64, Subscriber<T>)>,
+    // fused: bool,
     completed: bool,
     closed: bool,
     error: Option<Arc<dyn Error + Send + Sync>>,
 }
 
 impl<T: 'static> Subject<T> {
-    pub fn new() -> (SubjectTx<T>, SubjectRx<T>) {
+    /// Creates a new pair of `SubjectEmitter` for emitting values and
+    /// `SubjectReceiver` for subscribing to values.
+    pub fn emitter_receiver() -> (SubjectEmitter<T>, SubjectReceiver<T>) {
         let s = Arc::new(Mutex::new(Subject {
-            observers: Vec::with_capacity(15),
-            fused: false,
+            observers: Vec::with_capacity(16),
+            // fused: false,
             completed: false,
             closed: false,
             error: None,
         }));
 
-        (SubjectTx(Arc::clone(&s)), SubjectRx(Arc::clone(&s)))
+        (
+            SubjectEmitter(Arc::clone(&s)),
+            SubjectReceiver(Arc::clone(&s)),
+        )
     }
 }
 
+/// Subscription handler for `Subject`.
+///
+/// `SubjectReceiver` acts as an `Observable`, allowing you to utilize its
+/// `subscribe` method for receiving emissions from the `Subject`'s multicasting.
+/// You can also employ its `unsubscribe` method to close the `Subject` and
+/// remove registered observers.
 #[derive(Clone)]
-pub struct SubjectRx<T>(Arc<Mutex<Subject<T>>>);
+pub struct SubjectReceiver<T>(Arc<Mutex<Subject<T>>>);
 
+/// Multicasting emitter for `Subject`.
+///
+/// `SubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
+/// `error`, and `complete` methods for multicasting emissions to all registered
+/// observers within the `Subject`.
 #[derive(Clone)]
-pub struct SubjectTx<T>(Arc<Mutex<Subject<T>>>);
+pub struct SubjectEmitter<T>(Arc<Mutex<Subject<T>>>);
 
-impl<T> SubjectRx<T> {
+impl<T> SubjectReceiver<T> {
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
-    pub fn fuse(self) -> Self {
-        for o in &mut self.0.lock().unwrap().observers {
-            o.set_fused(true);
-        }
-        self
-    }
+    // pub(crate) fn fuse(self) -> Self {
+    //     for (_, o) in &mut self.0.lock().unwrap().observers {
+    //         o.set_fused(true);
+    //     }
+    //     self
+    // }
 
-    pub fn defuse(self) -> Self {
-        for o in &mut self.0.lock().unwrap().observers {
-            o.set_fused(false);
-        }
-        self
-    }
+    // pub(crate) fn defuse(self) -> Self {
+    //     for (_, o) in &mut self.0.lock().unwrap().observers {
+    //         o.set_fused(false);
+    //     }
+    //     self
+    // }
 }
 
-impl<T: 'static> Subscribeable for SubjectRx<T> {
+impl<T: 'static> Subscribeable for SubjectReceiver<T> {
     type ObsType = T;
 
     fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
+        let key: u64 = super::gen_key().next().unwrap_or(super::random_seed());
+
         if let Ok(mut src) = self.0.lock() {
             // If Subject is unsubscribed `closed` flag is set. When closed
             // Subject does not emit nor subscribes.
             if src.closed {
                 return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
             }
-            if src.fused {
-                v.set_fused(true);
-            }
+            // if src.fused {
+            //     v.set_fused(true);
+            // }
             // If Subject is completed do not register new Subscriber.
             if src.completed {
                 if let Some(err) = &src.error {
@@ -85,7 +227,7 @@ impl<T: 'static> Subscribeable for SubjectRx<T> {
                 }
                 return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
             }
-            src.observers.push(v);
+            src.observers.push((key, v));
         } else {
             return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
         };
@@ -94,15 +236,14 @@ impl<T: 'static> Subscribeable for SubjectRx<T> {
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                source_cloned.lock().unwrap().observers.clear();
-                // Maybe also mark Subject as completed?
+                source_cloned.lock().unwrap().observers.retain(move |v| v.0 != key);
             })),
             SubscriptionHandle::Nil,
         )
     }
 }
 
-impl<T> Unsubscribeable for SubjectRx<T> {
+impl<T> Unsubscribeable for SubjectReceiver<T> {
     fn unsubscribe(self) {
         if let Ok(mut r) = self.0.lock() {
             r.closed = true;
@@ -111,7 +252,7 @@ impl<T> Unsubscribeable for SubjectRx<T> {
     }
 }
 
-impl<T: Clone> Observer for SubjectTx<T> {
+impl<T: Clone> Observer for SubjectEmitter<T> {
     type NextFnType = T;
 
     fn next(&mut self, v: Self::NextFnType) {
@@ -120,7 +261,7 @@ impl<T: Clone> Observer for SubjectTx<T> {
                 return;
             }
         }
-        for o in &mut self.0.lock().unwrap().observers {
+        for (_, o) in &mut self.0.lock().unwrap().observers {
             o.next(v.clone());
         }
     }
@@ -130,7 +271,7 @@ impl<T: Clone> Observer for SubjectTx<T> {
             if src.completed || src.closed {
                 return;
             }
-            for o in &mut src.observers {
+            for (_, o) in &mut src.observers {
                 o.error(e.clone());
             }
             src.completed = true;
@@ -144,7 +285,7 @@ impl<T: Clone> Observer for SubjectTx<T> {
             if src.completed || src.closed {
                 return;
             }
-            for o in &mut src.observers {
+            for (_, o) in &mut src.observers {
                 o.complete();
             }
             src.completed = true;
@@ -153,18 +294,25 @@ impl<T: Clone> Observer for SubjectTx<T> {
     }
 }
 
-impl<T: Clone + 'static> From<SubjectTx<T>> for Subscriber<T> {
-    fn from(value: SubjectTx<T>) -> Self {
+impl<T: Clone + 'static> From<SubjectEmitter<T>> for Subscriber<T> {
+    fn from(mut value: SubjectEmitter<T>) -> Self {
         let mut vn = value.clone();
         let mut ve = value.clone();
-        let mut vc = value.clone();
         Subscriber::new(
             move |v| {
                 vn.next(v);
             },
             Some(move |e| ve.error(e)),
-            Some(move || vc.complete()),
+            Some(move || value.complete()),
         )
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> From<SubjectReceiver<T>> for Observable<T> {
+    fn from(mut value: SubjectReceiver<T>) -> Self {
+        Observable::new(move |subscriber| {
+            value.subscribe(subscriber)
+        })
     }
 }
 
@@ -222,7 +370,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = Subject::new();
+        let (mut stx, mut srx) = Subject::emitter_receiver();
 
         // Emit but no registered subscribers yet.
         stx.next(1);
@@ -307,7 +455,7 @@ mod test {
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
 
-        let (mut stx, mut srx) = Subject::new();
+        let (mut stx, mut srx) = Subject::emitter_receiver();
 
         // Register some subscribers.
         srx.subscribe(x); // 1st
