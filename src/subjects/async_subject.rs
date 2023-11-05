@@ -8,7 +8,8 @@ use crate::{
     subscribe::Unsubscribeable,
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
-    }, Observable,
+    },
+    Observable,
 };
 
 /// A specialized `Subject` variant emits its latest value to observers upon completion.
@@ -37,7 +38,7 @@ use crate::{
 ///```no_run
 /// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
-/// 
+///
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
@@ -45,7 +46,7 @@ use crate::{
 ///         Some(move || println!("Completed {}", subscriber_id)),
 ///     )
 /// }
-/// 
+///
 /// // Initialize a `AsyncSubject` and obtain its emitter and receiver.
 /// let (mut emitter, mut receiver) = AsyncSubject::emitter_receiver();
 ///
@@ -87,10 +88,10 @@ use crate::{
 /// use std::error::Error;
 /// use std::fmt::Display;
 /// use std::sync::Arc;
-/// 
+///
 /// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
-/// 
+///
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
@@ -98,18 +99,18 @@ use crate::{
 ///         Some(|| println!("Completed")),
 ///     )
 /// }
-/// 
+///
 /// #[derive(Debug)]
 /// struct AsyncSubjectError(String);
-/// 
+///
 /// impl Display for AsyncSubjectError {
 ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 ///         write!(f, "{}", self.0)
 ///     }
 /// }
-/// 
+///
 /// impl Error for AsyncSubjectError {}
-/// 
+///
 /// // Initialize a `AsyncSubject` and obtain its emitter and receiver.
 /// let (mut emitter, mut receiver) = AsyncSubject::emitter_receiver();
 ///
@@ -186,7 +187,7 @@ impl<T: Send + Sync + 'static> AsyncSubject<T> {
 pub struct AsyncSubjectReceiver<T>(Arc<Mutex<AsyncSubject<T>>>);
 
 // Multicasting emitter for `AsyncSubject`.
-/// 
+///
 /// `AsyncSubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
 /// `error`, and `complete` methods for multicasting emissions to all registered
 /// observers within the `AsyncSubject`.
@@ -252,7 +253,11 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectReceiver<T>
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                source_cloned.lock().unwrap().observers.retain(move |v| v.0 != key);
+                source_cloned
+                    .lock()
+                    .unwrap()
+                    .observers
+                    .retain(move |v| v.0 != key);
             })),
             SubscriptionHandle::Nil,
         )
@@ -331,9 +336,7 @@ impl<T: Clone + Send + 'static> From<AsyncSubjectEmitter<T>> for Subscriber<T> {
 
 impl<T: Clone + Send + Sync + 'static> From<AsyncSubjectReceiver<T>> for Observable<T> {
     fn from(mut value: AsyncSubjectReceiver<T>) -> Self {
-        Observable::new(move |subscriber| {
-            value.subscribe(subscriber)
-        })
+        Observable::new(move |subscriber| value.subscribe(subscriber))
     }
 }
 

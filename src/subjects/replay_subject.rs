@@ -10,7 +10,8 @@ use crate::{
     subscribe::Unsubscribeable,
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
-    }, Observable,
+    },
+    Observable,
 };
 
 struct EmittedValueEntry<T>(T, Instant);
@@ -76,7 +77,7 @@ pub enum BufSize {
 ///     subscribe::Subscriber,
 /// };
 /// use rxr::{ObservableExt, Observer, Subscribeable};
-/// 
+///
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
@@ -84,7 +85,7 @@ pub enum BufSize {
 ///         Some(move || println!("Completed {}", subscriber_id)),
 ///     )
 /// }
-/// 
+///
 /// // Initialize a `ReplaySubject` with an unbounded buffer size and obtain
 /// // its emitter and receiver.
 /// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Infinite);
@@ -124,14 +125,14 @@ pub enum BufSize {
 ///
 ///```no_run
 /// use std::{error::Error, fmt::Display, sync::Arc};
-/// 
+///
 /// use rxr::{
 ///     subjects::{BufSize, ReplaySubject},
 ///     subscribe::Subscriber,
 ///     Unsubscribeable,
 /// };
 /// use rxr::{ObservableExt, Observer, Subscribeable};
-/// 
+///
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
@@ -139,18 +140,18 @@ pub enum BufSize {
 ///         Some(|| println!("Completed")),
 ///     )
 /// }
-/// 
+///
 /// #[derive(Debug)]
 /// struct ReplaySubjectError(String);
-/// 
+///
 /// impl Display for ReplaySubjectError {
 ///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 ///         write!(f, "{}", self.0)
 ///     }
 /// }
-/// 
+///
 /// impl Error for ReplaySubjectError {}
-/// 
+///
 /// // Initialize a `ReplaySubject` with an unbounded buffer size and obtain
 /// // its emitter and receiver.
 /// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Infinite);
@@ -363,7 +364,11 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectReceiver<T
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                source_cloned.lock().unwrap().observers.retain(move |v| v.0 != key);
+                source_cloned
+                    .lock()
+                    .unwrap()
+                    .observers
+                    .retain(move |v| v.0 != key);
             })),
             SubscriptionHandle::Nil,
         )
@@ -455,9 +460,7 @@ impl<T: Clone + Send + 'static> From<ReplaySubjectEmitter<T>> for Subscriber<T> 
 
 impl<T: Clone + Send + Sync + 'static> From<ReplaySubjectReceiver<T>> for Observable<T> {
     fn from(mut value: ReplaySubjectReceiver<T>) -> Self {
-        Observable::new(move |subscriber| {
-            value.subscribe(subscriber)
-        })
+        Observable::new(move |subscriber| value.subscribe(subscriber))
     }
 }
 

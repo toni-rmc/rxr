@@ -5,8 +5,8 @@
 //! Unlike in `RxJS`, `rxr` subjects are split into emitter and receiver using the
 //! `emitter_receiver` function.
 //!
-//! The `Subject` emitter behaves as an `Observer`, enabling `next`, `error` and
-//! `complete` calls. This also allows the `Subject` emitter to be passed as a
+//! The `Subject` emitter behaves as an `Observer`, enabling `next()`, `error()` and
+//! `complete()` calls. This also allows the `Subject` emitter to be passed as a
 //! parameter to the `subscribe` method of another `Observable`.
 //!
 //! The `Subject` receiver functions as an `Observable`, enabling you to use the

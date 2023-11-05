@@ -375,7 +375,6 @@ async fn take_observable() {
         },
         Some(|_observable_error| {}),
         Some(move || {
-            println!("~~~~~~~~~~~~~~~~~~~~ BEFORE COMPLETE ~~~~~~~~~~~~~~~~~");
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value

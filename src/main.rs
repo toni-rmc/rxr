@@ -39,7 +39,7 @@ impl ObjectAnother {
 
 struct SomeStruct(usize);
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main()]
 async fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
 
@@ -83,7 +83,7 @@ async fn main() {
             o.complete();
         });
 
-       Subscription::new(UnsubscribeLogic::Logic(Box::new(move || {
+        Subscription::new(UnsubscribeLogic::Logic(Box::new(move || {
               if let Err(_) = tx.send(true) {
                   println!("receiver dropped");
                   return;
@@ -111,28 +111,29 @@ async fn main() {
        //  Subscription::new(UnsubscribeLogic::Wrapped(Box::new(obs)), SubscriptionHandle::Nil)
     });
 
-    let mut s = s.take(7);
+    let mut s = s.delay(40);
     // let mut s = s.filter(|x| { x % 2 != 0 } );
 
-    let (mut e, mut receiver_as_observable) = AsyncSubject::emitter_receiver();
+    // let (mut e, mut receiver_as_observable) = AsyncSubject::emitter_receiver();
 
-    e.next(7001);
-    e.next(7002);
+    // e.next(7001);
+    // e.next(7002);
 
-    // let sb = bar("eeeeeee0".to_string(), |_| {}).subscribe(Subscriber::new(|v| println!("####### {}", v),
-    //     None::<fn(_)>, None::<fn()>));
-    let us = s.merge(vec![
-        baz("qqqqq".to_string(), |_| {}).take(15).delay(5).map(|v| 1334),
-        receiver_as_observable.into(),
-        baz("qqqqq".to_string(), |_| {}).take(14).map(|v| 54804),
-    ]).subscribe(o);
+    // // let sb = bar("eeeeeee0".to_string(), |_| {}).subscribe(Subscriber::new(|v| println!("####### {}", v),
+    // //     None::<fn(_)>, None::<fn()>));
+    // let us = s.merge(vec![
+    //     baz("qqqqq".to_string(), |_| {}).take(15).map(|v| 1334),
+    //     receiver_as_observable.into(),
+    //     bar("qqqqq".to_string(), |_| {}).take(14).fuse().map(|v| 54804),
+    // ]).subscribe(o);
 
-    e.next(7008);
-    e.complete();
+    // e.next(7008);
+    // e.complete();
 
     // Test fuse.
     let test_fuse = Observable::new(|mut s: Subscriber<i32>| {
         for i in 0..=10 {
+            println!("In TEST FUSE OBSERVABLE");
             s.next(i);
             if i == 6 || i == 8 {
                 s.complete();   
@@ -143,24 +144,31 @@ async fn main() {
         Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
-    let mut test_fuse = test_fuse.fuse().delay(4000);
+    let test_fuse = test_fuse
+        .take(8)
+        .fuse()
+        // .delay(500)
+        .merge_one(bar("".to_string(), |_| {}).map(|_| 98989898));
+
+    let mut test_fuse = test_fuse.take(14).defuse();  // Try fuse() here.
 
     test_fuse.subscribe(Subscriber::new(|x| {
-            println!("Emitted: x is {}", x);
+            println!("Emitted 1: x is {}", x);
         },
-        Some(|e| { println!("error {}", e); }),
-        Some(|| { println!("test fuse complete called"); }))
+        Some(|e| { println!("error 1 {}", e); }),
+        Some(|| { println!("test fuse complete called 1"); }))
     );
 
-    test_fuse.subscribe(Subscriber::new(|x| {
-            println!("Emitted: x is {}", x);
+    let us = test_fuse.subscribe(Subscriber::new(|x| {
+            println!("Emitted 2: x is {}", x);
         },
-        Some(|e| { println!("error {}", e); }),
-        Some(|| { println!("test fuse complete called"); }))
+        Some(|e| { println!("error 2 {}", e); }),
+        Some(|| { println!("test fuse complete called 2"); }))
     );
     // Test fuse.
 
-    //us.unsubscribe();
+    us.join_thread_or_task().await;
+    // us.unsubscribe();
 
     // let handle = match us.get_handle() {
     //     SubscriptionHandle::JoinThread(h) => {
@@ -393,7 +401,7 @@ async fn main() {
 
     // stx.next(3);
 
-    let _ = std::thread::sleep(Duration::from_millis(5000));
+    // let _ = std::thread::sleep(Duration::from_millis(5000));
 
     // task::spawn(async {
     //     std::thread::spawn(|| {
@@ -465,13 +473,20 @@ fn bar(v: String,
             for i in 0..=100 {
                 let v = v.clone();
                 if *done.lock().unwrap() {
+                    println!("bar() -------- UNSUBSCRIBED");
                     break;
                 }
                // if i == 4 {
                //     o.error(ObservableError::NoInfo);
                // }
                 last_emit = i;
+                println!("In bar()");
                 o.next(format!("iv = {} ov = {}", i, v));
+
+                if i == 8 {
+                    o.complete();
+                }
+
                 sleep(Duration::from_millis(1)).await;
             }
             v.push_str("  --");
@@ -479,7 +494,7 @@ fn bar(v: String,
             o.complete();
         });
 
-       Subscription::new(UnsubscribeLogic::Future(Box::pin(async move {
+        Subscription::new(UnsubscribeLogic::Future(Box::pin(async move {
                if (tx.send(true).await).is_err() {
                    println!("receiver dropped");
                }
@@ -522,6 +537,7 @@ fn baz(v: String,
                //     o.error(ObservableError::NoInfo);
                // }
                 last_emit = i;
+                println!("In baz()");
                 o.next(format!("iv = {} ov = {}", i, v));
                 std::thread::sleep(Duration::from_millis(1));
             }

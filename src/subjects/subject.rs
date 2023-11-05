@@ -8,7 +8,8 @@ use crate::{
     subscribe::Unsubscribeable,
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic,
-    }, Observable,
+    },
+    Observable,
 };
 
 /// A `Subject` represents a unique variant of an `Observable` that enables
@@ -35,7 +36,7 @@ use crate::{
 ///```no_run
 /// use rxr::{subjects::Subject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
-/// 
+///
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
@@ -43,7 +44,7 @@ use crate::{
 ///         Some(move || println!("Completed {}", subscriber_id)),
 ///     )
 /// }
-/// 
+///
 /// // Initialize a `Subject` and obtain its emitter and receiver.
 /// let (mut emitter, mut receiver) = Subject::emitter_receiver();
 ///
@@ -81,12 +82,12 @@ use crate::{
 ///
 ///```no_run
 /// use std::time::Duration;
-/// 
+///
 /// use rxr::{
 ///     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
 ///     Observable, ObservableExt, Observer, Subject, Subscribeable,
 /// };
-/// 
+///
 /// // Make an Observable.
 /// let mut o = Observable::new(move |mut o: Subscriber<_>| {
 ///     for i in 0..=10 {
@@ -236,7 +237,11 @@ impl<T: 'static> Subscribeable for SubjectReceiver<T> {
 
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
-                source_cloned.lock().unwrap().observers.retain(move |v| v.0 != key);
+                source_cloned
+                    .lock()
+                    .unwrap()
+                    .observers
+                    .retain(move |v| v.0 != key);
             })),
             SubscriptionHandle::Nil,
         )
@@ -310,9 +315,7 @@ impl<T: Clone + 'static> From<SubjectEmitter<T>> for Subscriber<T> {
 
 impl<T: Clone + Send + Sync + 'static> From<SubjectReceiver<T>> for Observable<T> {
     fn from(mut value: SubjectReceiver<T>) -> Self {
-        Observable::new(move |subscriber| {
-            value.subscribe(subscriber)
-        })
+        Observable::new(move |subscriber| value.subscribe(subscriber))
     }
 }
 

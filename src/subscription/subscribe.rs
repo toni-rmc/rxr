@@ -1,9 +1,13 @@
 use std::{
-    any::Any, error::Error, future::Future, pin::Pin, sync::Arc,
+    any::Any,
+    error::Error,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
     thread::JoinHandle as ThreadJoinHandle,
 };
 
-use tokio::task::JoinHandle;
+use tokio::task::{self, JoinHandle};
 
 use crate::observer::Observer;
 
@@ -31,7 +35,6 @@ pub trait Subscribeable {
     ///
     /// A `Subscription` that represents the subscription to the observable stream.
     fn subscribe(&mut self, s: Subscriber<Self::ObsType>) -> Subscription;
-
 
     /// Checks if the object implementing this trait is a variant of a `Subject`.
     ///
@@ -72,11 +75,11 @@ pub struct Subscriber<NextFnType> {
     error_fn: Option<Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>>,
     completed: bool,
     fused: bool,
+    pub(crate) defused: bool,
     errored: bool,
 }
 
 impl<NextFnType> Subscriber<NextFnType> {
-
     /// Creates a new `Subscriber` instance with custom handling functions for emitted
     /// values, errors, and completion.
     ///
@@ -93,6 +96,7 @@ impl<NextFnType> Subscriber<NextFnType> {
             error_fn: None,
             completed: false,
             fused: false,
+            defused: false,
             errored: false,
         };
 
@@ -105,9 +109,15 @@ impl<NextFnType> Subscriber<NextFnType> {
         s
     }
 
+    // TODO: add is_fused() method.
+
     pub(crate) fn set_fused(&mut self, f: bool) {
         self.fused = f;
     }
+
+    // pub(crate) fn set_defused(&mut self, d: bool) {
+    //     self.defused = d;
+    // }
 }
 
 impl<N> Observer for Subscriber<N> {
@@ -139,6 +149,230 @@ impl<N> Observer for Subscriber<N> {
         }
     }
 }
+
+type AwaitResult<T> = Result<T, Box<dyn Any + Send>>;
+
+pub struct SubscriptionCollection {
+    subscriptions: Arc<Mutex<Option<Vec<Subscription>>>>,
+    signal_sent: Arc<RwLock<bool>>,
+    use_task: bool,
+}
+
+impl SubscriptionCollection {
+    pub(crate) fn new(s: Arc<Mutex<Option<Vec<Subscription>>>>, use_task: bool) -> Self {
+        SubscriptionCollection {
+            subscriptions: s,
+            signal_sent: Arc::new(RwLock::new(false)),
+            use_task,
+        }
+    }
+
+    pub(crate) fn join_all(self) -> AwaitResult<()> {
+        let mut subscriptionsh = self.subscriptions.lock().unwrap();
+
+        let subscriptions = subscriptionsh.take();
+
+        // Prepare channel for listening unsubscribing signal from `take()` operatior.
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        *subscriptionsh = Some(vec![Subscription::new(
+            UnsubscribeLogic::Logic(Box::new(move || {
+                // Send signal for unsubscribing.
+                let _ = tx.send(true);
+            })),
+            SubscriptionHandle::Nil,
+        )]);
+
+        // Wait for unsubscribing signal.
+        let cl = Arc::clone(&self.signal_sent);
+        std::thread::spawn(move || {
+            if let Ok(true) = rx.recv() {
+                *cl.write().unwrap() = true;
+            }
+        });
+
+        drop(subscriptionsh);
+
+        if subscriptions.is_none() {
+            return Ok(());
+        }
+
+        let mut stored = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
+        let mut stored_tasks = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
+
+        use std::thread::{sleep, spawn};
+
+        for mut s in subscriptions.unwrap() {
+            if *self.signal_sent.read().unwrap() {
+                s.unsubscribe();
+                continue;
+            }
+
+            match s.subscription_future {
+                SubscriptionHandle::Nil => (),
+                SubscriptionHandle::JoinThread(thread_handle) => {
+                    s.subscription_future = SubscriptionHandle::Nil;
+                    stored.push(s);
+
+                    let h = spawn(|| thread_handle.join());
+                    stored_tasks.push(h);
+                }
+                SubscriptionHandle::JoinSubscriptions(collection) => {
+                    s.subscription_future = SubscriptionHandle::Nil;
+                    stored.push(s);
+
+                    let h = spawn(|| collection.join_all());
+                    stored_tasks.push(h);
+                }
+                SubscriptionHandle::JoinTask(..) => {
+                    panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_thread_or_task().await` to await the completion of observables.");
+                }
+            }
+        }
+
+        let local_signal = Arc::new(RwLock::new(false));
+        let local_signal_cloned = Arc::clone(&local_signal);
+        spawn(move || loop {
+            if *self.signal_sent.read().unwrap() {
+                let r = stored.pop();
+                if let Some(s) = r {
+                    s.unsubscribe();
+                }
+            }
+
+            if stored.is_empty() || *local_signal_cloned.read().unwrap() {
+                break;
+            }
+            sleep(std::time::Duration::from_millis(5));
+        });
+
+        for s in stored_tasks {
+            s.join()
+                .unwrap_or(Err(Box::new("failed to await merged observable")))?;
+        }
+        *local_signal.write().unwrap() = true;
+        Ok(())
+    }
+
+    pub(crate) fn join_all_async(self) -> Pin<Box<dyn Future<Output = AwaitResult<()>> + 'static>> {
+        Box::pin(async move {
+            let mut subscriptionsh = self.subscriptions.lock().unwrap();
+
+            let subscriptions = subscriptionsh.take();
+
+            if self.use_task {
+                // Prepare channel for listening unsubscribing signal from `take()` operatior.
+                let (tx, mut rx) = tokio::sync::mpsc::channel(5);
+
+                *subscriptionsh = Some(vec![Subscription::new(
+                    UnsubscribeLogic::Future(Box::pin(async move {
+                        // Send signal for unsubscribing.
+                        let _ = tx.send(true).await;
+                    })),
+                    SubscriptionHandle::Nil,
+                )]);
+
+                // Wait for unsubscribing signal.
+                let cl = Arc::clone(&self.signal_sent);
+                task::spawn(async move {
+                    if let Some(true) = rx.recv().await {
+                        *cl.write().unwrap() = true;
+                    }
+                });
+            } else {
+                // Prepare channel for listening unsubscribing signal from `take()` operatior.
+                let (tx, rx) = std::sync::mpsc::channel();
+
+                *subscriptionsh = Some(vec![Subscription::new(
+                    UnsubscribeLogic::Logic(Box::new(move || {
+                        // Send signal for unsubscribing.
+                        let _ = tx.send(true);
+                    })),
+                    SubscriptionHandle::Nil,
+                )]);
+
+                // Wait for unsubscribing signal.
+                let cl = Arc::clone(&self.signal_sent);
+                std::thread::spawn(move || {
+                    if let Ok(true) = rx.recv() {
+                        *cl.write().unwrap() = true;
+                    }
+                });
+            }
+
+            drop(subscriptionsh);
+
+            if subscriptions.is_none() {
+                return Ok(());
+            }
+
+            let mut stored = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
+            let mut stored_tasks = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
+
+            for mut s in subscriptions.unwrap() {
+                if *self.signal_sent.read().unwrap() {
+                    s.unsubscribe();
+                    continue;
+                }
+
+                match s.subscription_future {
+                    SubscriptionHandle::Nil => (),
+                    SubscriptionHandle::JoinTask(task_handle) => {
+                        s.subscription_future = SubscriptionHandle::Nil;
+                        stored.push(s);
+
+                        let h = task::spawn(async {
+                            let r = task_handle.await;
+                            if r.is_err() {
+                                return r.map_err(|e| Box::new(e) as Box<dyn Any + Send>);
+                            }
+                            Ok(())
+                        });
+                        stored_tasks.push(h);
+                    }
+                    SubscriptionHandle::JoinThread(thread_handle) => {
+                        s.subscription_future = SubscriptionHandle::Nil;
+                        stored.push(s);
+
+                        let h = task::spawn(async { thread_handle.join() });
+                        stored_tasks.push(h);
+                    }
+                    SubscriptionHandle::JoinSubscriptions(collection) => {
+                        s.subscription_future = SubscriptionHandle::Nil;
+                        stored.push(s);
+
+                        let h = task::spawn_local(async { collection.join_all_async().await });
+                        stored_tasks.push(h);
+                    }
+                }
+            }
+
+            let h = task::spawn(async move {
+                loop {
+                    if *self.signal_sent.read().unwrap() {
+                        let r = stored.pop();
+                        if let Some(s) = r {
+                            s.unsubscribe();
+                        }
+                    }
+
+                    if stored.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                }
+            });
+
+            for s in stored_tasks {
+                s.await
+                    .unwrap_or(Err(Box::new("failed to await merged observable")))?;
+            }
+            h.abort();
+            Ok(())
+        })
+    }
+}
+
 /// Enumeration representing different types of handles used by `Subscriber` to await
 /// asynchronous tasks or threads.
 pub enum SubscriptionHandle {
@@ -150,6 +384,8 @@ pub enum SubscriptionHandle {
 
     /// Holds a join handle for awaiting a thread.
     JoinThread(ThreadJoinHandle<()>),
+
+    JoinSubscriptions(SubscriptionCollection),
 }
 
 // enum SubscriptionError {
@@ -206,6 +442,7 @@ impl Subscription {
                 r.map_err(|e| Box::new(e) as Box<dyn Any + Send>)
             }
             SubscriptionHandle::JoinThread(thread_handle) => thread_handle.join(),
+            SubscriptionHandle::JoinSubscriptions(s) => s.join_all_async().await,
             SubscriptionHandle::Nil => Ok(()),
         }
     }
@@ -229,8 +466,9 @@ impl Subscription {
         match self.subscription_future {
             SubscriptionHandle::JoinThread(thread_handle) => thread_handle.join(),
             SubscriptionHandle::Nil => Ok(()),
+            SubscriptionHandle::JoinSubscriptions(s) => s.join_all(),
             SubscriptionHandle::JoinTask(_) => {
-                panic!("handle should be OS thread handle but it is tokio task handle instead")
+                panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_thread_or_task().await` to await the completion of observables.")
             }
         }
     }
@@ -265,8 +503,8 @@ pub enum UnsubscribeLogic {
     Logic(Box<dyn FnOnce() + Send>),
 
     /// Asynchronous unsubscribe logic represented by a future. Use if you need to
-    /// spawn `Tokio` tasks or `.await` as a part of the unsubscribe logic. 
-    Future(Pin<Box<dyn Future<Output = ()> + Send + Sync>>),
+    /// spawn `Tokio` tasks or `.await` as a part of the unsubscribe logic.
+    Future(Pin<Box<dyn Future<Output = ()> + Send>>),
 }
 
 impl UnsubscribeLogic {
