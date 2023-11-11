@@ -5,7 +5,6 @@
  * Ensure errors are wrapped in an `Arc` before passing them to the Observer's
  * `error` function.
  */
-
 use std::{error::Error, fmt::Display, io, sync::Arc};
 
 use rxr::{subscribe::*, Observable, Observer, Subscribeable};

@@ -3,7 +3,6 @@
  * unsubscribed from, enabling all operators to function correctly. It utilizes an OS
  * thread for asynchronous processing, preventing it from blocking the current thread.
  */
-
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -93,7 +92,6 @@ fn main() {
 
     // Unsubscribe from the observable to stop emissions.
     subscription.unsubscribe();
-
 
     // Allow some time for the main thread to confirm that the observable indeed
     // isn't emitting.

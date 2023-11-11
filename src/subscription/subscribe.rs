@@ -7,6 +7,7 @@ use std::{
     thread::JoinHandle as ThreadJoinHandle,
 };
 
+use tokio::runtime;
 use tokio::task::{self, JoinHandle};
 
 use crate::observer::Observer;
@@ -259,6 +260,9 @@ impl SubscriptionCollection {
             let mut subscriptionsh = self.subscriptions.lock().unwrap();
 
             let subscriptions = subscriptionsh.take();
+            let signal_sent = Arc::clone(&self.signal_sent);
+            let signal_sent_cl = Arc::clone(&signal_sent);
+            let signal_sent_cl2 = Arc::clone(&signal_sent);
 
             if self.use_task {
                 // Prepare channel for listening unsubscribing signal from `take()` operatior.
@@ -273,10 +277,9 @@ impl SubscriptionCollection {
                 )]);
 
                 // Wait for unsubscribing signal.
-                let cl = Arc::clone(&self.signal_sent);
                 task::spawn(async move {
                     if let Some(true) = rx.recv().await {
-                        *cl.write().unwrap() = true;
+                        *signal_sent.write().unwrap() = true;
                     }
                 });
             } else {
@@ -292,10 +295,9 @@ impl SubscriptionCollection {
                 )]);
 
                 // Wait for unsubscribing signal.
-                let cl = Arc::clone(&self.signal_sent);
                 std::thread::spawn(move || {
                     if let Ok(true) = rx.recv() {
-                        *cl.write().unwrap() = true;
+                        *signal_sent.write().unwrap() = true;
                     }
                 });
             }
@@ -308,6 +310,7 @@ impl SubscriptionCollection {
 
             let mut stored = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
             let mut stored_tasks = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
+            let mut stored_threads = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
 
             for mut s in subscriptions.unwrap() {
                 if *self.signal_sent.read().unwrap() {
@@ -333,9 +336,7 @@ impl SubscriptionCollection {
                     SubscriptionHandle::JoinThread(thread_handle) => {
                         s.subscription_future = SubscriptionHandle::Nil;
                         stored.push(s);
-
-                        let h = task::spawn(async { thread_handle.join() });
-                        stored_tasks.push(h);
+                        stored_threads.push(thread_handle);
                     }
                     SubscriptionHandle::JoinSubscriptions(collection) => {
                         s.subscription_future = SubscriptionHandle::Nil;
@@ -347,9 +348,55 @@ impl SubscriptionCollection {
                 }
             }
 
+            let mut tokio_current_thread = false;
+            if let runtime::RuntimeFlavor::CurrentThread =
+                runtime::Handle::current().runtime_flavor()
+            {
+                tokio_current_thread = true;
+            }
+
+            let stop_thread_event_loop = Arc::new(RwLock::new(false));
+            let stop_thread_event_loop_cl = Arc::clone(&stop_thread_event_loop);
+
+            if tokio_current_thread {
+                // If flavor is `current_thread` move Subscribers from observables
+                // that use OS threads into their own `Vec`.
+                let mut stored_threads_subscriptions = Vec::with_capacity(8);
+                let mut i = 0;
+                while i < stored.len() {
+                    if let UnsubscribeLogic::Logic(_) = &mut stored[i].unsubscribe_logic {
+                        stored_threads_subscriptions.push(stored.remove(i));
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Start event loop in OS thread to accept unsubscribe signal from
+                // async observables that use OS threads.
+                std::thread::spawn(move || loop {
+                    // println!("+++++++++  THREAD event loop");
+                    if *signal_sent_cl2.read().unwrap() {
+                        let r = stored_threads_subscriptions.pop();
+                        if let Some(s) = r {
+                            s.unsubscribe();
+                        }
+                    }
+
+                    if stored_threads_subscriptions.is_empty()
+                        || *stop_thread_event_loop_cl.read().unwrap()
+                    {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                });
+            }
+
+            // Start Tokio task event loop to await for unsubscribe signal from all
+            // async observables or only from async observables that use Tokio tasks
+            // if runtime flavor is `current_thread`.
             let h = task::spawn(async move {
                 loop {
-                    if *self.signal_sent.read().unwrap() {
+                    // println!("*********  TASK event loop");
+                    if *signal_sent_cl.read().unwrap() {
                         let r = stored.pop();
                         if let Some(s) = r {
                             s.unsubscribe();
@@ -367,6 +414,13 @@ impl SubscriptionCollection {
                 s.await
                     .unwrap_or(Err(Box::new("failed to await merged observable")))?;
             }
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
+            for s in stored_threads {
+                s.join()?;
+            }
+            // Stop event loops.
+            *stop_thread_event_loop.write().unwrap() = true;
             h.abort();
             Ok(())
         })
@@ -403,6 +457,7 @@ pub enum SubscriptionHandle {
 pub struct Subscription {
     pub(crate) unsubscribe_logic: UnsubscribeLogic,
     pub(crate) subscription_future: SubscriptionHandle,
+    pub(crate) runtime_handle: Result<runtime::Handle, runtime::TryCurrentError>,
 }
 
 impl Subscription {
@@ -423,9 +478,11 @@ impl Subscription {
         unsubscribe_logic: UnsubscribeLogic,
         subscription_future: SubscriptionHandle,
     ) -> Self {
+        let runtime_handle = tokio::runtime::Handle::try_current();
         Subscription {
             unsubscribe_logic,
             subscription_future,
+            runtime_handle,
         }
     }
 
@@ -486,7 +543,7 @@ impl Unsubscribeable for Subscription {
         //         });
         //     },
         // }
-        self.unsubscribe_logic.unsubscribe();
+        self.unsubscribe_logic.unsubscribe(self.runtime_handle);
     }
 }
 
@@ -508,7 +565,10 @@ pub enum UnsubscribeLogic {
 }
 
 impl UnsubscribeLogic {
-    fn unsubscribe(mut self) -> Self {
+    fn unsubscribe(
+        mut self,
+        runtime_handle: Result<runtime::Handle, runtime::TryCurrentError>,
+    ) -> Self {
         match self {
             UnsubscribeLogic::Nil => (),
             UnsubscribeLogic::Logic(fnc) => {
@@ -520,9 +580,16 @@ impl UnsubscribeLogic {
                 self = Self::Nil;
             }
             UnsubscribeLogic::Future(future) => {
-                tokio::task::spawn(async {
-                    future.await;
-                });
+                match runtime_handle {
+                    Ok(handle) => {
+                        handle.spawn(async {
+                            future.await;
+                        });
+                    }
+                    Err(_) => panic!(
+                        "Observable that uses Tokio tasks is called outside of Tokio runtime"
+                    ),
+                }
                 self = Self::Nil;
             }
         }

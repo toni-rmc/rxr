@@ -16,6 +16,16 @@ use crate::{
     },
 };
 
+enum Sender<T> {
+    OSSender(std::sync::mpsc::Sender<T>),
+    TokioSender(tokio::sync::mpsc::Sender<T>),
+}
+
+enum Receiver<T> {
+    OSReceiver(std::sync::mpsc::Receiver<T>),
+    TokioReceiver(tokio::sync::mpsc::Receiver<T>),
+}
+
 /// The `Observable` struct represents a source of values that can be observed
 /// and transformed.
 ///
@@ -678,14 +688,39 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let o_cloned_c = Arc::clone(&o_shared);
 
             // TODO: check if Tokio is used, if yes open async channel, if not open
-            // OS thread channel. Make enums to hold senders and receivers.
-            let (tx, rx) = std::sync::mpsc::channel();
+            // OS thread channel. Store senders and receivers in their enum pairs.
+            let mut use_tokio = false;
+            let mut is_current = false;
+            let tx;
+            let rx;
+            // Check if Tokio runtime is used.
+            let tokio_handle = tokio::runtime::Handle::try_current();
+            if let Ok(t) = &tokio_handle {
+                // If it is check if runtime flavor is `current_thread`.
+                if let tokio::runtime::RuntimeFlavor::CurrentThread = t.runtime_flavor() {
+                    is_current = true;
+                }
+            }
+            // Open non-blocking channel only if Tokio is used and runtime flavor is
+            // not `current_thread.`
+            if let (Ok(_), false) = (&tokio_handle, is_current) {
+                let (sender, receiver) = tokio::sync::mpsc::channel(10);
+                tx = Sender::TokioSender(sender);
+                rx = Receiver::TokioReceiver(receiver);
+                use_tokio = true;
+            } else {
+                // Tokio runtime flavor is `current_thread` or Tokio is not used at
+                // all; open `std` sync channel.
+                let (sender, receiver) = std::sync::mpsc::channel();
+                tx = Sender::OSSender(sender);
+                rx = Receiver::OSReceiver(receiver);
+            }
             let mut signal_sent = false;
 
-            // Alternative implementation for Subject's if desired behavior is to skip
-            // call to unsubscribe() when take() operator is used. This might be used
-            // for performance reasons because opening a channel and spawning a new thread
-            // can be skipped when this operator is used on Subject's.
+            // Alternative implementation for Subject's if desired behavior is to
+            // skip call to unsubscribe() when take() operator is used. This might be
+            // used for performance reasons because opening a channel and spawning a
+            // new thread can be skipped when this operator is used on Subject's.
             if self.is_subject() {
                 signal_sent = true;
             }
@@ -696,12 +731,22 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         i += 1;
                         o_shared.lock().unwrap().next(v);
                     } else if !signal_sent {
-                        // let tx = tx.clone();
                         signal_sent = true;
-                        // std::thread::spawn(move || {
-                        // println!("Send >>>>>>>>>>>>>>>");
-                        let _ = tx.send(true);
-                        // });
+                        // Check which channel is used and use it's sender to send
+                        // unsubscribe signal.
+                        if use_tokio {
+                            if let Ok(h) = &tokio_handle {
+                                if let Sender::TokioSender(s) = &tx {
+                                    let s = s.clone();
+                                    h.spawn(async move {
+                                        s.send(true).await.unwrap();
+                                    });
+                                }
+                            }
+                        } else if let Sender::OSSender(s) = &tx {
+                            let s = s.clone();
+                            let _ = s.send(true);
+                        }
                     }
                 },
                 Some(move |observable_error| {
@@ -711,6 +756,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 }),
             );
+            // Propagate defuse flag.
             u.defused = defused;
 
             let mut unsubscriber = self.subscribe(u);
@@ -727,22 +773,42 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     ijh,
                 );
             }
-
-            // Check if unsubscribe logic is Future so we can use Tokio tasks.
+            let mut is_future = false;
             if let UnsubscribeLogic::Future(_) = &unsubscriber.unsubscribe_logic {
-                let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
-                let u_cloned = Arc::clone(&unsubscriber);
+                is_future = true;
+            };
+            let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
+            let u_cloned = Arc::clone(&unsubscriber);
 
-                tokio::task::spawn(async move {
-                    if rx.recv().is_ok() {
-                        // println!("SIGNAL received");
-                        if let Some(s) = unsubscriber.lock().unwrap().take() {
-                            // println!("UNSUBSCRIBE called");
-                            s.unsubscribe();
+            // Check which channel is used and use it's receiver to receive
+            // unsubscribe signal.
+            match rx {
+                Receiver::TokioReceiver(mut receiver) => {
+                    tokio::task::spawn(async move {
+                        if receiver.recv().await.is_some() {
+                            // println!("SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
                         }
-                    }
-                });
+                    });
+                }
+                Receiver::OSReceiver(receiver) => {
+                    std::thread::spawn(move || {
+                        // println!("---- SIGNAL received");
+                        if receiver.recv().is_ok() {
+                            // println!("---- SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
+                        }
+                    });
+                }
+            };
 
+            if is_future {
                 return Subscription::new(
                     UnsubscribeLogic::Future(Box::pin(async move {
                         if let Some(s) = u_cloned.lock().unwrap().take() {
@@ -752,21 +818,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     ijh,
                 );
             }
-
-            // If unsubscribe logic is not Future we use OS threads instead.
-            let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
-            let u_cloned = Arc::clone(&unsubscriber);
-
-            let _ = std::thread::spawn(move || {
-                if rx.recv().is_ok() {
-                    // println!("SIGNAL received");
-                    if let Some(s) = unsubscriber.lock().unwrap().take() {
-                        // println!("UNSUBSCRIBE called");
-                        s.unsubscribe();
-                    }
-                }
-                // println!("RECEIVER dropped in take()");
-            });
 
             Subscription::new(
                 UnsubscribeLogic::Logic(Box::new(move || {
@@ -818,7 +869,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             if let UnsubscribeLogic::Future(_) = &s.unsubscribe_logic {
                 use_tokio_task = true;
             }
-            subscriptions.push(s);
 
             for source in &mut sources {
                 let wrapped = wrap_subscriber(o.clone(), defused);
@@ -829,6 +879,16 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 }
                 subscriptions.push(subscription);
             }
+
+            // If Tokio is used with `current_thread` runtime flavor returned
+            // Subscriber will be `UnsubscribeLogic::Logic` so that `take()` can
+            // unsubscribe background emissions in all cases.
+            if let Ok(handle) = s.runtime_handle.as_ref() {
+                if let tokio::runtime::RuntimeFlavor::CurrentThread = handle.runtime_flavor() {
+                    use_tokio_task = false;
+                }
+            }
+            subscriptions.push(s);
 
             let subscriptions = Arc::new(Mutex::new(Some(subscriptions)));
             let sc = Arc::clone(&subscriptions);
@@ -908,6 +968,14 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 _ => (),
             }
 
+            // If Tokio is used with `current_thread` runtime flavor returned
+            // Subscriber will be `UnsubscribeLogic::Logic` so that `take()` can
+            // unsubscribe background emissions in all cases.
+            if let Ok(handle) = s1.runtime_handle.as_ref() {
+                if let tokio::runtime::RuntimeFlavor::CurrentThread = handle.runtime_flavor() {
+                    use_tokio_task = false;
+                }
+            }
             let subscriptions = vec![s1, s2];
             let subscriptions = Arc::new(Mutex::new(Some(subscriptions)));
             let sc = Arc::clone(&subscriptions);

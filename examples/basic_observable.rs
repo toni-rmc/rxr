@@ -3,11 +3,10 @@
  * making it unable to be unsubscribed from. Some operators like `take`, `switch_map`,
  * `merge_map`, `concat_map`, and `exhaust_map` require unsubscribe functionality to
  * work correctly.
- * 
+ *
  * Additionally, this is a synchronous Observable, so it blocks the current thread until
  * it completes emission.
  */
-
 use rxr::subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic};
 use rxr::{Observable, Observer, Subscribeable};
 

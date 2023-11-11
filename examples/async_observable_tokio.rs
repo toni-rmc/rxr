@@ -3,7 +3,6 @@
  * be unsubscribed from, enabling all operators to function correctly. It uses `Tokio`
  * tasks for asynchronous processing, preventing it from blocking the current thread.
  */
-
 use std::sync::{Arc, Mutex};
 
 use rxr::{
@@ -11,7 +10,7 @@ use rxr::{
     Observable, ObservableExt, Observer, Subscribeable,
 };
 
-use tokio::{task, time, sync::mpsc::channel};
+use tokio::{sync::mpsc::channel, task, time};
 
 const UNSUBSCRIBE_SIGNAL: bool = true;
 

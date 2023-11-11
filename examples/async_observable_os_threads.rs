@@ -3,11 +3,10 @@
  * making it unable to be unsubscribed from. Some operators like `take`, `switch_map`,
  * `merge_map`, `concat_map`, and `exhaust_map` require unsubscribe functionality to
  * work correctly.
- * 
+ *
  * This asynchronous Observable utilizes an OS thread, preventing it from blocking the
  * current thread.
  */
-
 use std::time::Duration;
 
 use rxr::{
