@@ -63,8 +63,8 @@ fn unchained_observable() {
                 value, v
             );
         },
-        Some(|_observable_error| {}),
-        Some(move || {}),
+        |_observable_error| {},
+        move || {},
     );
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
@@ -93,8 +93,8 @@ fn map_observable() {
                 value, v
             );
         },
-        Some(|_observable_error| {}),
-        Some(move || {}),
+        |_observable_error| {},
+        move || {},
     );
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
@@ -122,15 +122,15 @@ fn map_observable() {
             // Make sure next is invoked.
             last_emit_value_c1.lock().unwrap().last_value = 1;
         },
-        Some(|_observable_error| {}),
-        Some(move || {
+        |_observable_error| {},
+        move || {
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value == 1,
                 "next method not called, last emitted value should be 1, but it is {}",
                 last_emit_value_c2.lock().unwrap().last_value
             );
-        }),
+        },
     );
 
     s.subscribe(o);
@@ -155,8 +155,8 @@ fn filter_observable() {
             assert!(v >= 0, "integer less than 0 emitted {}", v);
             assert!(v <= 10, "integer greater than 10 emitted {}", v);
         },
-        Some(|_observable_error| {}),
-        Some(move || {}),
+        |_observable_error| {},
+        move || {},
     );
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
@@ -183,8 +183,8 @@ fn filter_observable() {
                 last_emit_value_c1.lock().unwrap().last_value = v;
             }
         },
-        Some(|_observable_error| {}),
-        Some(move || {
+        |_observable_error| {},
+        move || {
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value == last - 1,
@@ -192,7 +192,7 @@ fn filter_observable() {
                 last,
                 last_emit_value_c2.lock().unwrap().last_value
             );
-        }),
+        },
     );
 
     s.subscribe(o);
@@ -222,8 +222,8 @@ fn delay_observable() {
             assert!(v >= 0, "integer less than 0 emitted {}", v);
             assert!(v <= 10, "integer greater than 10 emitted {}", v);
         },
-        Some(|_observable_error| {}),
-        Some(move || {}),
+        |_observable_error| {},
+        move || {},
     );
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
@@ -253,8 +253,8 @@ fn delay_observable() {
                 prev + 1
             );
         },
-        Some(|_observable_error| {}),
-        Some(move || {
+        |_observable_error| {},
+        move || {
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value == last,
@@ -262,7 +262,7 @@ fn delay_observable() {
                 last,
                 last_emit_value_c2.lock().unwrap().last_value
             );
-        }),
+        },
     );
 
     let check_delay_cnt = Arc::new(Mutex::new(0));
@@ -306,8 +306,8 @@ fn skip_observable() {
             assert!(v >= 0, "integer less than 0 emitted {}", v);
             assert!(v <= 10, "integer greater than 10 emitted {}", v);
         },
-        Some(|_observable_error| {}),
-        Some(move || {}),
+        |_observable_error| {},
+        move || {},
     );
 
     let mut s = Observable::new(move |mut o: Subscriber<_>| {
@@ -329,8 +329,8 @@ fn skip_observable() {
                 last_emit_value_c1.lock().unwrap().last_value = v;
             }
         },
-        Some(|_observable_error| {}),
-        Some(move || {
+        |_observable_error| {},
+        move || {
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value == last,
@@ -338,7 +338,7 @@ fn skip_observable() {
                 last,
                 last_emit_value_c2.lock().unwrap().last_value
             );
-        }),
+        },
     );
 
     s.subscribe(o);
@@ -373,8 +373,8 @@ async fn take_observable() {
                 last_emit_value_c1.lock().unwrap().last_value = v.try_into().unwrap();
             }
         },
-        Some(|_observable_error| {}),
-        Some(move || {
+        |_observable_error| {},
+        move || {
             last_emit_value_c2.lock().unwrap().completed = true;
             assert!(
                 last_emit_value_c2.lock().unwrap().last_value
@@ -383,7 +383,7 @@ async fn take_observable() {
                 take_bound - 1,
                 last_emit_value_c2.lock().unwrap().last_value
             );
-        }),
+        },
     );
 
     let observable = make_emit_u32_observable(100, move |last_emit_value| {
@@ -417,6 +417,49 @@ is {} and last emitted value is {}",
 }
 
 #[test]
+fn merge_observable() {
+    let values = Arc::new(Mutex::new(Vec::with_capacity(25)));
+    let values_cl = Arc::clone(&values);
+
+    let s = Subscriber::on_next(move |v| values_cl.lock().unwrap().push(v));
+    let o1 = make_emit_u32_observable(5, |_| {});
+    let o2 = make_emit_u32_observable(4, |_| {});
+    let o3 = make_emit_u32_observable(4, |_| {});
+
+    let outer = make_emit_u32_observable(8, |_| {});
+    let subscription = outer.merge(vec![o1, o2, o3]).subscribe(s);
+
+    subscription.join_thread().unwrap();
+    values.lock().unwrap().sort();
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 6, 7, 8],
+        "merge operator failed to merge observable streams"
+    );
+}
+
+#[test]
+fn merge_one_observable() {
+    let values = Arc::new(Mutex::new(Vec::with_capacity(18)));
+    let values_cl = Arc::clone(&values);
+
+    let s = Subscriber::on_next(move |v| values_cl.lock().unwrap().push(v));
+
+    let outer = make_emit_u32_observable(8, |_| {});
+    let subscription = outer
+        .merge_one(make_emit_u32_observable(8, |_| {}))
+        .subscribe(s);
+
+    subscription.join_thread().unwrap();
+    values.lock().unwrap().sort();
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8],
+        "merge_one operator failed to merge two observable streams"
+    );
+}
+
+#[test]
 fn switch_map_observable() {
     let last_emits_count = Arc::new(Mutex::new(0_u32));
     let last_emits_count2 = Arc::clone(&last_emits_count);
@@ -430,8 +473,8 @@ fn switch_map_observable() {
             |_| {
                 // Noop
             },
-            Some(|_observable_error| {}),
-            Some(|| {}),
+            |_observable_error| {},
+            || {},
         );
 
         let outer_o_max_count = 100;
@@ -576,13 +619,13 @@ async fn exhaust_map_observable() {
             |_| {
                 // Noop
             },
-            Some(|_observable_error| {}),
-            Some(move || {
+            |_observable_error| {},
+            move || {
                 // Set this flag to test next inner observable that should finish.
                 // XXX: But this test semaphore sometimes signals that inner observable
                 // should emit before exhaust_map actually signals it.
                 *observable_occupied2.lock().unwrap() = None;
-            }),
+            },
         );
 
         let outer_o_max_count = 100;
@@ -756,10 +799,10 @@ async fn concat_map_observable() {
                     }
                 }
             },
-            Some(|_observable_error| {}),
-            Some(move || {
+            |_observable_error| {},
+            move || {
                 *does_another_emitting2.lock().unwrap() = false;
-            }),
+            },
         );
 
         let outer_o_max_count = 100;
@@ -888,8 +931,8 @@ async fn merge_map_observable() {
             |_| {
                 // Noop
             },
-            Some(|_observable_error| {}),
-            Some(|| {}),
+            |_observable_error| {},
+            || {},
         );
 
         let outer_o_max_count = 100;

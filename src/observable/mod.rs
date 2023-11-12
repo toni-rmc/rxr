@@ -63,18 +63,10 @@ enum Receiver<T> {
 ///     Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
 /// });
 ///
-/// // Create the Subscriber with a mandatory `next` function, and optional
-/// // `error` and `complete` functions.
-/// let observer = Subscriber::new(
-///     |v| println!("Emitted {}", v),
-///     // No need for the `error` function in this simple example, but we
-///     // have to type annotate `None`.
-///     None::<fn(_)>,
-///     // The `complete` function is optional, so we wrap it in `Some()`.
-///     // Alternatively, we can skip the `complete` function entirely by
-///     // passing `None::<fn()>`.
-///     Some(|| println!("Completed")),
-/// );
+/// // Create the `Subscriber` with a mandatory `next` function, and optional
+/// // `complete` function. No need for `error` function in this simple example.
+/// let mut observer = Subscriber::on_next(|v| println!("Emitted {}", v));
+/// observer.on_complete(|| println!("Completed"));
 ///
 /// // This observable blocks until completion since it doesn't use async or
 /// // threads. If you comment out the line below, no emissions will occur
@@ -131,17 +123,9 @@ enum Receiver<T> {
 /// });
 ///
 /// // Create the `Subscriber` with a mandatory `next` function, and optional
-/// // `error` and `complete` functions.
-/// let observer = Subscriber::new(
-///     |v| println!("Emitted {}", v),
-///     // No need for error function in this simple example, but we
-///     // have to type annotate `None`.
-///     None::<fn(_)>,
-///     // The `complete` function is optional, so we wrap it in `Some()`.
-///     // Alternatively, we can skip the `complete` function entirely by
-///     // passing `None::<fn()>`.
-///     Some(|| println!("Completed")),
-/// );
+/// // `complete` function. No need for `error` function in this simple example.
+/// let mut observer = Subscriber::on_next(|v| println!("Emitted {}", v));
+/// observer.on_complete(|| println!("Completed"));
 ///
 /// // This observable uses OS threads so it will not block the current thread.
 /// // Observables are cold so if you comment out the statement bellow nothing
@@ -231,17 +215,9 @@ enum Receiver<T> {
 /// });
 ///
 /// // Create the `Subscriber` with a mandatory `next` function, and optional
-/// // `error` and `complete` functions.
-/// let observer = Subscriber::new(
-///     |v| println!("Emitted {}", v),
-///     // No need for error function in this simple example, but we
-///     // have to type annotate `None`.
-///     None::<fn(_)>,
-///     // The `complete` function is optional, so we wrap it in `Some()`.
-///     // Alternatively, we can skip the `complete` function entirely by
-///     // passing `None::<fn()>`.
-///     Some(|| println!("Completed")),
-/// );
+/// // `complete` function. No need for `error` function in this simple example.
+/// let mut observer = Subscriber::on_next(|v| println!("Emitted {}", v));
+/// observer.on_complete(|| println!("Completed"));
 ///
 /// // This observable uses OS threads so it will not block the current thread.
 /// // Observables are cold so if you comment out the statement bellow nothing
@@ -334,17 +310,9 @@ enum Receiver<T> {
 ///     });
 ///
 ///     // Create the `Subscriber` with a mandatory `next` function, and optional
-///     // `error` and `complete` functions.
-///     let observer = Subscriber::new(
-///         |v| println!("Emitted {}", v),
-///         // No need for error function in this simple example, but we
-///         // have to type annotate `None`.
-///         None::<fn(_)>,
-///         // The `complete` function is optional, so we wrap it in `Some()`.
-///         // Alternatively, we can skip the `complete` function entirely by
-///         // passing `None::<fn()>`.
-///         Some(|| println!("Completed")),
-///     );
+///     // `complete` function. No need for `error` function in this simple example.
+///     let mut observer = Subscriber::on_next(|v| println!("Emitted {}", v));
+///     observer.on_complete(|| println!("Completed"));
 ///
 ///     // This observable uses Tokio tasks so it will not block the current thread.
 ///     // Observables are cold so if you comment out the statement bellow nothing
@@ -431,8 +399,8 @@ enum Receiver<T> {
 ///
 /// let observer = Subscriber::new(
 ///     |input| println!("You entered: {}", input),
-///     Some(|e| eprintln!("{}", e)),
-///     Some(|| println!("User input handled")),
+///     |e| eprintln!("{}", e),
+///     || println!("User input handled"),
 /// );
 ///
 /// let mut observable = get_less_than_100();
@@ -548,12 +516,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     let t = f(v);
                     o_shared.lock().unwrap().next(t);
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             u.defused = defused;
             self.subscribe(u)
@@ -581,12 +549,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         o_shared.lock().unwrap().next(v);
                     }
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             u.defused = defused;
             self.subscribe(u)
@@ -616,12 +584,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     }
                     o_shared.lock().unwrap().next(v);
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             u.defused = defused;
             self.subscribe(u)
@@ -648,12 +616,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     std::thread::sleep(Duration::from_millis(num_of_ms));
                     o_shared.lock().unwrap().next(v);
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             u.defused = defused;
             self.subscribe(u)
@@ -749,12 +717,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         }
                     }
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             // Propagate defuse flag.
             u.defused = defused;
@@ -847,12 +815,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 move |v| {
                     s.lock().unwrap().next(v);
                 },
-                Some(move |e| {
+                move |e| {
                     s_error.lock().unwrap().error(e);
-                }),
-                Some(move || {
+                },
+                move || {
                     s_complete.lock().unwrap().complete();
-                }),
+                },
             );
             s.defused = is_defused;
             s
@@ -939,12 +907,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 move |v| {
                     s.lock().unwrap().next(v);
                 },
-                Some(move |e| {
+                move |e| {
                     s_error.lock().unwrap().error(e);
-                }),
-                Some(move || {
+                },
+                move || {
                     s_complete.lock().unwrap().complete();
-                }),
+                },
             );
             s.defused = is_defused;
             s
@@ -1051,12 +1019,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         move |k| {
                             o_shared.lock().unwrap().next(k);
                         },
-                        Some(move |observable_error| {
+                        move |observable_error| {
                             o_cloned_e.lock().unwrap().error(observable_error);
-                        }),
-                        Some(move || {
+                        },
+                        move || {
                             o_cloned_c.lock().unwrap().complete();
-                        }),
+                        },
                     );
 
                     if let Some(subscription) = current_subscription.take() {
@@ -1066,12 +1034,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     let s = inner_observable.subscribe(inner_subscriber);
                     current_subscription = Some(s);
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             self.subscribe(u)
         })
@@ -1121,21 +1089,21 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         move |k| {
                             o_shared.lock().unwrap().next(k);
                         },
-                        Some(move |observable_error| {
+                        move |observable_error| {
                             o_cloned_e.lock().unwrap().error(observable_error);
-                        }),
-                        Some(move || {
+                        },
+                        move || {
                             o_cloned_c.lock().unwrap().complete();
-                        }),
+                        },
                     );
                     inner_observable.subscribe(inner_subscriber);
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             self.subscribe(u)
         })
@@ -1190,15 +1158,15 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
                     let inner_subscriber = Subscriber::new(
                         move |k| o_shared.lock().unwrap().next(k),
-                        Some(move |observable_error| {
+                        move |observable_error| {
                             o_cloned_e.lock().unwrap().error(observable_error);
-                        }),
-                        Some(move || {
+                        },
+                        move || {
                             o_cloned_c.lock().unwrap().complete();
                             if let Some((mut io, is)) = po_cloned.lock().unwrap().pop_front() {
                                 io.subscribe(is);
                             }
-                        }),
+                        },
                     );
 
                     if first_pass {
@@ -1211,12 +1179,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         .unwrap()
                         .push_back((inner_observable, inner_subscriber));
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             self.subscribe(u)
         })
@@ -1281,16 +1249,16 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
                     let inner_subscriber = Subscriber::new(
                         move |k| o_shared.lock().unwrap().next(k),
-                        Some(move |observable_error| {
+                        move |observable_error| {
                             o_cloned_e.lock().unwrap().error(observable_error);
-                        }),
-                        Some(move || {
+                        },
+                        move || {
                             o_cloned_c.lock().unwrap().complete();
 
                             // Mark this inner subscription as completed so that next
                             // one can be allowed to emit all of it's values.
                             *as_cloned2.lock().unwrap() = false;
-                        }),
+                        },
                     );
 
                     // TODO: move this check at the top of the function and return early.
@@ -1304,12 +1272,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         // });
                     }
                 },
-                Some(move |observable_error| {
+                move |observable_error| {
                     o_cloned_e.lock().unwrap().error(observable_error);
-                }),
-                Some(move || {
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
-                }),
+                },
             );
             self.subscribe(u)
         })

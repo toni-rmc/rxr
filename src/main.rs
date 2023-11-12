@@ -44,16 +44,16 @@ struct SomeStruct(usize);
 async fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
 
-    let o = Subscriber::new(
-        |v: i32| {
-            println!("----- {}", v);
-            // v.print();
-        },
-        Some(|observable_error| {
-            println!("{}", observable_error);
-        }),
-        Some(|| println!("Completed .................")),
-    );
+    let mut o = Subscriber::on_next(|v: i32| {
+        println!("----- {}", v);
+        // v.print();
+    });
+
+    o.on_error(|observable_error| {
+        println!("{}", observable_error);
+    });
+
+    o.on_complete(|| println!("Completed ................."));
 
     let mut s = Observable::new(|mut o| {
         let done = Arc::new(Mutex::new(false));
@@ -171,15 +171,15 @@ async fn main() {
         .merge(vec![
             bar("qqqqq".to_string(), |_| {}).map(|v| 1334).take(6),
             receiver_as_observable.into(),
-            baz("qqqqq".to_string(), |_| {}).map(|v| 54804),
+            baz("qqqqq".to_string(), |_| {}).map(|v| 54804).take(14),
         ])
-        .take(10)
         .subscribe(o);
 
     e.next(7008);
     e.complete();
 
     us.join_thread_or_task().await;
+    // us.unsubscribe();
 
     // Test fuse.
     // let test_fuse = Observable::new(|mut s: Subscriber<i32>| {
@@ -254,8 +254,8 @@ async fn main() {
             println!("----- {:?}", v);
             // });
         },
-        None::<fn(_)>,
-        Some(|| println!("Completed ------ .................")),
+        |_| {},
+        || println!("Completed ------ ................."),
     );
 
     // ------- task::spawn(async move {

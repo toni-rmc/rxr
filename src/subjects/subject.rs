@@ -40,8 +40,8 @@ use crate::{
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
-///         Some(|_| eprintln!("Error")),
-///         Some(move || println!("Completed {}", subscriber_id)),
+///         |_| eprintln!("Error"),
+///         move || println!("Completed {}", subscriber_id),
 ///     )
 /// }
 ///
@@ -61,8 +61,8 @@ use crate::{
 ///     .map(|v| format!("mapped {}", v))
 ///     .subscribe(Subscriber::new(
 ///         move |v| println!("Subscriber #2 emitted: {}", v),
-///         Some(|_| eprintln!("Error")),
-///         Some(|| println!("Completed 2")),
+///         |_| eprintln!("Error"),
+///         || println!("Completed 2"),
 ///     ));
 ///
 /// // Registers `Subscriber` 3.
@@ -105,8 +105,8 @@ use crate::{
 /// // Register `Subscriber` 1.
 /// receiver.subscribe(Subscriber::new(
 ///     |v| println!("Subscriber 1: {}", v),
-///     Some(|e| eprintln!("Error 1: {}", e)),
-///     Some(|| println!("Completed Subscriber 1")),
+///     |e| eprintln!("Error 1: {}", e),
+///     || println!("Completed Subscriber 1"),
 /// ));
 ///
 /// // Register `Subscriber` 2.
@@ -119,8 +119,8 @@ use crate::{
 ///     .map(|v| format!("mapped {}", v))
 ///     .subscribe(Subscriber::new(
 ///         |v| println!("Subscriber 2: {}", v),
-///         Some(|e| eprintln!("Error 2: {}", e)),
-///         Some(|| println!("Completed Subscriber 2")),
+///         |e| eprintln!("Error 2: {}", e),
+///         || println!("Completed Subscriber 2"),
 ///     ));
 ///
 /// // Register `Subscriber` 3.
@@ -129,8 +129,8 @@ use crate::{
 ///     .map(|v| format!("filtered {}", v))
 ///     .subscribe(Subscriber::new(
 ///         |v| println!("Subscriber 3: {}", v),
-///         Some(|e| eprintln!("Error 3: {}", e)),
-///         Some(|| println!("Completed Subscriber 3")),
+///         |e| eprintln!("Error 3: {}", e),
+///         || println!("Completed Subscriber 3"),
 ///     ));
 ///
 /// // Convert the emitter into an observer and subscribe it to the observable.
@@ -307,8 +307,8 @@ impl<T: Clone + 'static> From<SubjectEmitter<T>> for Subscriber<T> {
             move |v| {
                 vn.next(v);
             },
-            Some(move |e| ve.error(e)),
-            Some(move || value.complete()),
+            move |e| ve.error(e),
+            move || value.complete(),
         )
     }
 }
@@ -353,14 +353,14 @@ mod test {
                         // Track next() calls.
                         nexts_c.lock().unwrap().push(n);
                     },
-                    Some(move |_| {
+                    move |_| {
                         // Track error() calls.
                         errors_c.lock().unwrap().push(1);
-                    }),
-                    Some(move || {
+                    },
+                    move || {
                         // Track complete() calls.
                         completes_c.lock().unwrap().push(1);
-                    }),
+                    },
                 )
             };
             10

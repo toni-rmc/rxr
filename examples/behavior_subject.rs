@@ -4,8 +4,8 @@ use rxr::{ObservableExt, Observer, Subscribeable};
 pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
     Subscriber::new(
         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
-        Some(|_| eprintln!("Error")),
-        Some(move || println!("Completed {}", subscriber_id)),
+        |_| eprintln!("Error"),
+        move || println!("Completed {}", subscriber_id),
     )
 }
 
@@ -27,8 +27,8 @@ pub fn main() {
         .map(|v| format!("mapped {}", v))
         .subscribe(Subscriber::new(
             move |v| println!("Subscriber #2 emitted: {}", v),
-            Some(|_| eprintln!("Error")),
-            Some(|| println!("Completed 2")),
+            |_| eprintln!("Error"),
+            || println!("Completed 2"),
         ));
 
     // Registers `Subscriber` 3 and emits (now the default) value 102 to it.

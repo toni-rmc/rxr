@@ -83,31 +83,56 @@ pub struct Subscriber<NextFnType> {
 impl<NextFnType> Subscriber<NextFnType> {
     /// Creates a new `Subscriber` instance with custom handling functions for emitted
     /// values, errors, and completion.
-    ///
-    /// Error and completion handling functions are optional and can be specified based
-    /// on requirements.
     pub fn new(
-        next_fnc: impl FnMut(NextFnType) + 'static + Send,
-        error_fnc: Option<impl FnMut(Arc<dyn Error + Send + Sync>) + 'static + Send + Sync>,
-        complete_fnc: Option<impl FnMut() + 'static + Send + Sync>,
+        next_fn: impl FnMut(NextFnType) + 'static + Send,
+        error_fn: impl FnMut(Arc<dyn Error + Send + Sync>) + 'static + Send + Sync,
+        complete_fn: impl FnMut() + 'static + Send + Sync,
     ) -> Self {
-        let mut s = Subscriber {
-            next_fn: Box::new(next_fnc),
+        Subscriber {
+            next_fn: Box::new(next_fn),
+            complete_fn: Some(Box::new(complete_fn)),
+            error_fn: Some(Box::new(error_fn)),
+            completed: false,
+            fused: false,
+            defused: false,
+            errored: false,
+        }
+    }
+
+    /// Create a new Subscriber with the provided `next` function.
+    ///
+    /// The `next` closure is called when the observable emits a new item. It takes
+    /// a parameter of type `NextFnType`, which is an item emitted by the observable.
+    pub fn on_next(next_fn: impl FnMut(NextFnType) + 'static + Send) -> Self {
+        Subscriber {
+            next_fn: Box::new(next_fn),
             complete_fn: None,
             error_fn: None,
             completed: false,
             fused: false,
             defused: false,
             errored: false,
-        };
+        }
+    }
 
-        if let Some(cfn) = complete_fnc {
-            s.complete_fn = Some(Box::new(cfn));
-        }
-        if let Some(efn) = error_fnc {
-            s.error_fn = Some(Box::new(efn));
-        }
-        s
+    /// Set the completion function for the Subscriber.
+    ///
+    /// The provided closure will be called when the observable completes its
+    /// emission sequence.
+    pub fn on_complete(&mut self, complete_fn: impl FnMut() + 'static + Send + Sync) {
+        self.complete_fn = Some(Box::new(complete_fn));
+    }
+
+    /// Set the error-handling function for the Subscriber.
+    ///
+    /// The provided closure will be called when the observable encounters an error
+    /// during its emission sequence. It takes an `Arc` wrapping a trait object that
+    /// implements the `Error`, `Send`, and `Sync` traits as its parameter.
+    pub fn on_error(
+        &mut self,
+        error_fn: impl FnMut(Arc<dyn Error + Send + Sync>) + 'static + Send + Sync,
+    ) {
+        self.error_fn = Some(Box::new(error_fn));
     }
 
     // TODO: add is_fused() method.

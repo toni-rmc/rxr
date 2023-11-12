@@ -59,8 +59,8 @@ pub fn get_less_than_100() -> Observable<i32> {
 fn main() {
     let observer = Subscriber::new(
         |input| println!("You entered: {}", input),
-        Some(|e| eprintln!("{}", e)),
-        Some(|| println!("User input handled")),
+        |e| eprintln!("{}", e),
+        || println!("User input handled"),
     );
 
     let mut observable = get_less_than_100();

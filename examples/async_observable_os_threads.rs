@@ -45,17 +45,9 @@ fn main() {
     });
 
     // Create the `Subscriber` with a mandatory `next` function, and optional
-    // `error` and `complete` functions.
-    let observer = Subscriber::new(
-        |v| println!("Emitted {}", v),
-        // No need for error function in this simple example, but we
-        // have to type annotate `None`.
-        None::<fn(_)>,
-        // The `complete` function is optional, so we wrap it in `Some()`.
-        // Alternatively, we can skip the `complete` function entirely by
-        // passing `None::<fn()>`.
-        Some(|| println!("Completed")),
-    );
+    // `complete` function. No need for `error` function in this simple example.
+    let mut observer = Subscriber::on_next(|v| println!("Emitted {}", v));
+    observer.on_complete(|| println!("Completed"));
 
     // This observable uses OS threads so it will not block the current thread.
     // Observables are cold so if you comment out the statement bellow nothing

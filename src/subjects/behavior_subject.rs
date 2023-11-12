@@ -42,8 +42,8 @@ use crate::{
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
-///         Some(|_| eprintln!("Error")),
-///         Some(move || println!("Completed {}", subscriber_id)),
+///         |_| eprintln!("Error"),
+///         move || println!("Completed {}", subscriber_id),
 ///     )
 /// }
 ///
@@ -64,8 +64,8 @@ use crate::{
 ///     .map(|v| format!("mapped {}", v))
 ///     .subscribe(Subscriber::new(
 ///         move |v| println!("Subscriber #2 emitted: {}", v),
-///         Some(|_| eprintln!("Error")),
-///         Some(|| println!("Completed 2")),
+///         |_| eprintln!("Error"),
+///         || println!("Completed 2"),
 ///     ));
 ///
 /// // Registers `Subscriber` 3 and emits (now the default) value 102 to it.
@@ -94,8 +94,8 @@ use crate::{
 /// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
-///         Some(move |e| eprintln!("Error: {} {}", e, subscriber_id)),
-///         Some(|| println!("Completed")),
+///         move |e| eprintln!("Error: {} {}", e, subscriber_id),
+///         || println!("Completed"),
 ///     )
 /// }
 ///
@@ -127,8 +127,8 @@ use crate::{
 ///     .map(|v| format!("mapped {}", v))
 ///     .subscribe(Subscriber::new(
 ///         move |v| println!("Subscriber #2 emitted: {}", v),
-///         Some(|e| eprintln!("Error: {} 2", e)),
-///         Some(|| println!("Completed")),
+///         |e| eprintln!("Error: {} 2", e),
+///         || println!("Completed"),
 ///     ));
 ///
 /// // Registers `Subscriber` 3 and emits (now the default) value 102 to it.
@@ -336,8 +336,8 @@ impl<T: Clone + Send + 'static> From<BehaviorSubjectEmitter<T>> for Subscriber<T
             move |v| {
                 vn.next(v);
             },
-            Some(move |e| ve.error(e)),
-            Some(move || value.complete()),
+            move |e| ve.error(e),
+            move || value.complete(),
         )
     }
 }
@@ -384,14 +384,14 @@ mod test {
                         // Track next() calls.
                         nexts_c.lock().unwrap().push(n);
                     },
-                    Some(move |_| {
+                    move |_| {
                         // Track error() calls.
                         errors_c.lock().unwrap().push(1);
-                    }),
-                    Some(move || {
+                    },
+                    move || {
                         // Track complete() calls.
                         completes_c.lock().unwrap().push(1);
-                    }),
+                    },
                 )
             };
             10

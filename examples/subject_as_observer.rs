@@ -23,8 +23,8 @@ pub fn main() {
     // Register `Subscriber` 1.
     receiver.subscribe(Subscriber::new(
         |v| println!("Subscriber 1: {}", v),
-        Some(|e| eprintln!("Error 1: {}", e)),
-        Some(|| println!("Completed Subscriber 1")),
+        |e| eprintln!("Error 1: {}", e),
+        || println!("Completed Subscriber 1"),
     ));
 
     // Register `Subscriber` 2.
@@ -37,8 +37,8 @@ pub fn main() {
         .map(|v| format!("mapped {}", v))
         .subscribe(Subscriber::new(
             |v| println!("Subscriber 2: {}", v),
-            Some(|e| eprintln!("Error 2: {}", e)),
-            Some(|| println!("Completed Subscriber 2")),
+            |e| eprintln!("Error 2: {}", e),
+            || println!("Completed Subscriber 2"),
         ));
 
     // Register `Subscriber` 3.
@@ -47,8 +47,8 @@ pub fn main() {
         .map(|v| format!("filtered {}", v))
         .subscribe(Subscriber::new(
             |v| println!("Subscriber 3: {}", v),
-            Some(|e| eprintln!("Error 3: {}", e)),
-            Some(|| println!("Completed Subscriber 3")),
+            |e| eprintln!("Error 3: {}", e),
+            || println!("Completed Subscriber 3"),
         ));
 
     // Convert the emitter into an observer and subscribe it to the observable.
