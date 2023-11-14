@@ -32,10 +32,10 @@ impl<T> EmittedValueEntry<T> {
 /// [`emitter_receiver_time_aware`]: struct.ReplaySubject.html#method.emitter_receiver_time_aware
 pub enum BufSize {
     /// Specifies an infinite buffer size, allowing all emitted values to be replayed.
-    Infinite,
+    Unbounded,
 
     /// Specifies a limited buffer size with the maximum number of values to be replayed.
-    Limited(usize),
+    Bounded(usize),
 }
 
 /// Replaying old values to new subscribers, this variant of `Subject` emits these
@@ -88,7 +88,7 @@ pub enum BufSize {
 ///
 /// // Initialize a `ReplaySubject` with an unbounded buffer size and obtain
 /// // its emitter and receiver.
-/// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Infinite);
+/// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Unbounded);
 ///
 /// // Registers `Subscriber` 1.
 /// receiver.subscribe(create_subscriber(1));
@@ -154,7 +154,7 @@ pub enum BufSize {
 ///
 /// // Initialize a `ReplaySubject` with an unbounded buffer size and obtain
 /// // its emitter and receiver.
-/// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Infinite);
+/// let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Unbounded);
 ///
 /// // Registers `Subscriber` 1.
 /// receiver.subscribe(create_subscriber(1));
@@ -208,7 +208,7 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
     /// previous emissions to new subscribers.
     ///
     /// The `buf_size` parameter determines the size of the buffer used for replaying
-    /// values to new subscribers. A buffer size of `BufSize::Infinite` means an
+    /// values to new subscribers. A buffer size of `BufSize::Unbounded` means an
     /// infinite buffer, retaining all past values for replay.
     ///
     /// Returns a tuple containing a `ReplaySubjectEmitter` for emitting values and
@@ -228,8 +228,8 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
         };
 
         match s.buf_size {
-            BufSize::Infinite => s.values = VecDeque::with_capacity(16),
-            BufSize::Limited(size) => s.values = VecDeque::with_capacity(size),
+            BufSize::Unbounded => s.values = VecDeque::with_capacity(16),
+            BufSize::Bounded(size) => s.values = VecDeque::with_capacity(size),
         }
         let s = Arc::new(Mutex::new(s));
 
@@ -243,7 +243,7 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
     /// time-aware window for controlling how long values stay in the buffer.
     ///
     /// The `buf_size` parameter specifies the maximum number of values to keep in
-    /// the buffer. If set to `BufSize::Infinite`, the buffer can grow indefinitely.
+    /// the buffer. If set to `BufSize::Unbounded`, the buffer can grow indefinitely.
     /// The `window_size_ms` parameter defines the duration (in milliseconds) for
     /// which values remain in the buffer. Once this duration elapses, values are
     /// removed from the buffer.
@@ -266,8 +266,8 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
         };
 
         match s.buf_size {
-            BufSize::Infinite => s.values = VecDeque::with_capacity(16),
-            BufSize::Limited(size) => s.values = VecDeque::with_capacity(size),
+            BufSize::Unbounded => s.values = VecDeque::with_capacity(16),
+            BufSize::Bounded(size) => s.values = VecDeque::with_capacity(size),
         }
         let s = Arc::new(Mutex::new(s));
 
@@ -393,8 +393,8 @@ impl<T: Clone> Observer for ReplaySubjectEmitter<T> {
                 return;
             }
             match src.buf_size {
-                BufSize::Infinite => src.values.push_back(EmittedValueEntry::new(v.clone())),
-                BufSize::Limited(buf_size) => {
+                BufSize::Unbounded => src.values.push_back(EmittedValueEntry::new(v.clone())),
+                BufSize::Bounded(buf_size) => {
                     // Check if buffer is full.
                     if src.values.len() == buf_size {
                         // If yes, remove first entry from the buffer.
@@ -524,7 +524,7 @@ mod test {
         let (mut make_subscriber, nexts, completes, errors) = subject_value_registers();
 
         let x = make_subscriber.pop().unwrap()();
-        let (mut stx, mut srx) = ReplaySubject::emitter_receiver(BufSize::Limited(5));
+        let (mut stx, mut srx) = ReplaySubject::emitter_receiver(BufSize::Bounded(5));
 
         // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);
@@ -621,7 +621,7 @@ mod test {
         let y = make_subscriber.pop().unwrap()();
         let z = make_subscriber.pop().unwrap()();
 
-        let (mut stx, mut srx) = ReplaySubject::emitter_receiver(BufSize::Infinite);
+        let (mut stx, mut srx) = ReplaySubject::emitter_receiver(BufSize::Unbounded);
 
         // Register some subscribers.
         srx.subscribe(x); // 1st
@@ -683,7 +683,7 @@ mod test {
 
         // Initialize ReplaySubject with time aware value buffer.
         let (mut stx, mut srx) =
-            ReplaySubject::emitter_receiver_time_aware(BufSize::Limited(10), 500);
+            ReplaySubject::emitter_receiver_time_aware(BufSize::Bounded(10), 500);
 
         // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);
@@ -763,7 +763,7 @@ mod test {
 
         // Initialize ReplaySubject with time aware value buffer.
         let (mut stx, mut srx) =
-            ReplaySubject::emitter_receiver_time_aware(BufSize::Limited(10), 500);
+            ReplaySubject::emitter_receiver_time_aware(BufSize::Bounded(10), 500);
 
         // Emit but no registered subscribers yet, still store emitted value.
         stx.next(1);

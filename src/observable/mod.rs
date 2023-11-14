@@ -141,7 +141,7 @@ enum Receiver<T> {
 /// // Because the subscription creates a new thread, we can utilize the `Subscription`
 /// // to wait for its completion. This ensures that the main thread won't terminate
 /// // prematurely and stop all child threads.
-/// if subscription.join_thread().is_err() {
+/// if subscription.join().is_err() {
 ///     // Handle error
 /// }
 ///
@@ -329,7 +329,7 @@ enum Receiver<T> {
 ///     println!("Do something while Observable is emitting.");
 ///
 ///     // Wait for the subscription to either complete as a Tokio task or join an OS thread.
-///     if subscription.join_thread_or_task().await.is_err() {
+///     if subscription.join_concurrent().await.is_err() {
 ///         // Handle error
 ///     }
 ///
@@ -431,6 +431,11 @@ impl<T> Observable<T> {
         }
     }
 
+    /// Creates an empty observable.
+    ///
+    /// The resulting observable does not emit any values and immediately completes
+    /// upon subscription. It serves as a placeholder or a base case for some
+    /// observable operations.
     pub fn empty() -> Self {
         Observable {
             subscribe_fn: Box::new(|_| {
@@ -655,12 +660,11 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
 
-            // TODO: check if Tokio is used, if yes open async channel, if not open
-            // OS thread channel. Store senders and receivers in their enum pairs.
             let mut use_tokio = false;
             let mut is_current = false;
             let tx;
             let rx;
+
             // Check if Tokio runtime is used.
             let tokio_handle = tokio::runtime::Handle::try_current();
             if let Ok(t) = &tokio_handle {

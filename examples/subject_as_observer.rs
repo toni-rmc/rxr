@@ -1,19 +1,26 @@
-use std::time::Duration;
+use std::{fmt::Display, time::Duration};
 
 use rxr::{
     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
     Observable, ObservableExt, Observer, Subject, Subscribeable,
 };
 
+pub fn create_subscriber<T: Display>(subscriber_id: u32) -> Subscriber<T> {
+    Subscriber::new(
+        move |v: T| println!("Subscriber {}: {}", subscriber_id, v),
+        move |e| eprintln!("Error {}: {}", subscriber_id, e),
+        move || println!("Completed Subscriber {}", subscriber_id),
+    )
+}
+
 pub fn main() {
     // Make an Observable.
     let mut o = Observable::new(move |mut o: Subscriber<_>| {
-        for i in 0..=10 {
+        for i in 0..10 + 1 {
             o.next(i);
             std::thread::sleep(Duration::from_millis(1));
         }
         o.complete();
-
         Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
     });
 
@@ -21,11 +28,7 @@ pub fn main() {
     let (emitter, mut receiver) = Subject::emitter_receiver();
 
     // Register `Subscriber` 1.
-    receiver.subscribe(Subscriber::new(
-        |v| println!("Subscriber 1: {}", v),
-        |e| eprintln!("Error 1: {}", e),
-        || println!("Completed Subscriber 1"),
-    ));
+    receiver.subscribe(create_subscriber(1));
 
     // Register `Subscriber` 2.
     receiver
@@ -35,21 +38,13 @@ pub fn main() {
         .take(7) // For performance, prioritize placing `take()` as the first operator.
         .delay(1000)
         .map(|v| format!("mapped {}", v))
-        .subscribe(Subscriber::new(
-            |v| println!("Subscriber 2: {}", v),
-            |e| eprintln!("Error 2: {}", e),
-            || println!("Completed Subscriber 2"),
-        ));
+        .subscribe(create_subscriber(2));
 
     // Register `Subscriber` 3.
     receiver
         .filter(|v| v % 2 == 0)
         .map(|v| format!("filtered {}", v))
-        .subscribe(Subscriber::new(
-            |v| println!("Subscriber 3: {}", v),
-            |e| eprintln!("Error 3: {}", e),
-            || println!("Completed Subscriber 3"),
-        ));
+        .subscribe(create_subscriber(3));
 
     // Convert the emitter into an observer and subscribe it to the observable.
     o.subscribe(emitter.into());

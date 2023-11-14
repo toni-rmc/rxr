@@ -404,7 +404,7 @@ is {} and last emitted value is {}",
     let s = observable.subscribe(o);
 
     // Await the thread started in observable.
-    if let Err(e) = s.join_thread() {
+    if let Err(e) = s.join() {
         // Check if task in observable panicked.
         // If yes, resume and unwind panic to make the test fail with
         // proper error message.
@@ -429,7 +429,7 @@ fn merge_observable() {
     let outer = make_emit_u32_observable(8, |_| {});
     let subscription = outer.merge(vec![o1, o2, o3]).subscribe(s);
 
-    subscription.join_thread().unwrap();
+    subscription.join().unwrap();
     values.lock().unwrap().sort();
     assert_eq!(
         *values.lock().unwrap(),
@@ -450,7 +450,7 @@ fn merge_one_observable() {
         .merge_one(make_emit_u32_observable(8, |_| {}))
         .subscribe(s);
 
-    subscription.join_thread().unwrap();
+    subscription.join().unwrap();
     values.lock().unwrap().sort();
     assert_eq!(
         *values.lock().unwrap(),
@@ -554,7 +554,7 @@ Expected {}, found {}",
         let s = observable.subscribe(o);
 
         // Await the thread started in outer observable.
-        if let Err(e) = s.join_thread() {
+        if let Err(e) = s.join() {
             // Check if task in outer observable panicked.
             //if e.is_panic() {
             // If yes, resume and unwind panic to make the test fail with
@@ -719,7 +719,7 @@ been rejected. Outer observable is {}.",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join_thread() {
+        if let Err(e) = s.join() {
             // Check if task in outer observable panicked.
             // if e.is_panic() {
             // If yes, resume and unwind panic to make the test fail with
@@ -869,7 +869,7 @@ outer observable value should have been {}, got {} instead",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join_thread() {
+        if let Err(e) = s.join() {
             // Check if task in outer observable panicked.
             // if e.is_panic() {
             // If yes, resume and unwind panic to make the test fail with
@@ -987,7 +987,7 @@ Expected {}, found {}",
         let s = observable.subscribe(o);
 
         // Await the task started in outer observable.
-        if let Err(e) = s.join_thread() {
+        if let Err(e) = s.join() {
             // Check if task in outer observable panicked.
             // if e.is_panic() {
             // If yes, resume and unwind panic to make the test fail with

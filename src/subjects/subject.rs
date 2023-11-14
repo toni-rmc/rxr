@@ -60,7 +60,7 @@ use crate::{
 ///     .clone() // Shallow clone: clones only the pointer to the `Subject`.
 ///     .map(|v| format!("mapped {}", v))
 ///     .subscribe(Subscriber::new(
-///         move |v| println!("Subscriber #2 emitted: {}", v),
+///         |v| println!("Subscriber #2 emitted: {}", v),
 ///         |_| eprintln!("Error"),
 ///         || println!("Completed 2"),
 ///     ));
@@ -81,21 +81,28 @@ use crate::{
 /// Utilizing a Subject as an Observer. This can be done with any variant of Subject.
 ///
 ///```no_run
-/// use std::time::Duration;
+/// use std::{fmt::Display, time::Duration};
 ///
 /// use rxr::{
 ///     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
 ///     Observable, ObservableExt, Observer, Subject, Subscribeable,
 /// };
 ///
+/// pub fn create_subscriber<T: Display>(subscriber_id: u32) -> Subscriber<T> {
+///     Subscriber::new(
+///         move |v: T| println!("Subscriber {}: {}", subscriber_id, v),
+///         move |e| eprintln!("Error {}: {}", subscriber_id, e),
+///         move || println!("Completed Subscriber {}", subscriber_id),
+///     )
+/// }
+///
 /// // Make an Observable.
-/// let mut o = Observable::new(move |mut o: Subscriber<_>| {
-///     for i in 0..=10 {
+/// let mut observable = Observable::new(|mut o: Subscriber<_>| {
+///     for i in 0..10 + 1 {
 ///         o.next(i);
 ///         std::thread::sleep(Duration::from_millis(1));
 ///     }
 ///     o.complete();
-///
 ///     Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
 /// });
 ///
@@ -103,11 +110,7 @@ use crate::{
 /// let (emitter, mut receiver) = Subject::emitter_receiver();
 ///
 /// // Register `Subscriber` 1.
-/// receiver.subscribe(Subscriber::new(
-///     |v| println!("Subscriber 1: {}", v),
-///     |e| eprintln!("Error 1: {}", e),
-///     || println!("Completed Subscriber 1"),
-/// ));
+/// receiver.subscribe(create_subscriber(1));
 ///
 /// // Register `Subscriber` 2.
 /// receiver
@@ -117,24 +120,16 @@ use crate::{
 ///     .take(7) // For performance, prioritize placing `take()` as the first operator.
 ///     .delay(1000)
 ///     .map(|v| format!("mapped {}", v))
-///     .subscribe(Subscriber::new(
-///         |v| println!("Subscriber 2: {}", v),
-///         |e| eprintln!("Error 2: {}", e),
-///         || println!("Completed Subscriber 2"),
-///     ));
+///     .subscribe(create_subscriber(2));
 ///
 /// // Register `Subscriber` 3.
 /// receiver
 ///     .filter(|v| v % 2 == 0)
 ///     .map(|v| format!("filtered {}", v))
-///     .subscribe(Subscriber::new(
-///         |v| println!("Subscriber 3: {}", v),
-///         |e| eprintln!("Error 3: {}", e),
-///         || println!("Completed Subscriber 3"),
-///     ));
+///     .subscribe(create_subscriber(3));
 ///
 /// // Convert the emitter into an observer and subscribe it to the observable.
-/// o.subscribe(emitter.into());
+/// observable.subscribe(emitter.into());
 ///```
 pub struct Subject<T> {
     observers: Vec<(u64, Subscriber<T>)>,

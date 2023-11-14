@@ -60,6 +60,9 @@ async fn main() {
         let done_c = Arc::clone(&done);
         let (tx, rx) = std::sync::mpsc::channel();
 
+        if o.is_fused() {
+            println!("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFUSEDDDDDDDDDDDDDDD");
+        }
         std::thread::spawn(move || {
             if let Ok(i) = rx.recv() {
                 *done_c.lock().unwrap() = i;
@@ -170,15 +173,16 @@ async fn main() {
     let us = s
         .merge(vec![
             bar("qqqqq".to_string(), |_| {}).map(|v| 1334).take(6),
-            receiver_as_observable.into(),
+            // receiver_as_observable.into(),
             baz("qqqqq".to_string(), |_| {}).map(|v| 54804).take(14),
         ])
+        .fuse()
         .subscribe(o);
 
     e.next(7008);
     e.complete();
 
-    us.join_thread_or_task().await;
+    us.join_concurrent().await;
     // us.unsubscribe();
 
     // Test fuse.

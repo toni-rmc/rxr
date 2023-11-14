@@ -29,7 +29,7 @@ impl Error for ReplaySubjectError {}
 pub fn main() {
     // Initialize a `ReplaySubject` with an unbounded buffer size and obtain
     // its emitter and receiver.
-    let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Infinite);
+    let (mut emitter, mut receiver) = ReplaySubject::emitter_receiver(BufSize::Unbounded);
 
     // Registers `Subscriber` 1.
     receiver.subscribe(create_subscriber(1));

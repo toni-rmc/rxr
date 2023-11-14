@@ -63,7 +63,7 @@ fn main() {
     // Because the subscription creates a new thread, we can utilize the `Subscription`
     // to wait for its completion. This ensures that the main thread won't terminate
     // prematurely and stop all child threads.
-    if subscription.join_thread().is_err() {
+    if subscription.join().is_err() {
         // Handle error
     }
 

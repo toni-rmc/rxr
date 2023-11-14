@@ -86,7 +86,7 @@ async fn main() {
     println!("Do something while Observable is emitting.");
 
     // Wait for the subscription to either complete as a Tokio task or join an OS thread.
-    if subscription.join_thread_or_task().await.is_err() {
+    if subscription.join_concurrent().await.is_err() {
         // Handle error
     }
 

@@ -135,7 +135,20 @@ impl<NextFnType> Subscriber<NextFnType> {
         self.error_fn = Some(Box::new(error_fn));
     }
 
-    // TODO: add is_fused() method.
+    /// If you fuse an observable this method will return true. When making your
+    /// observable, you can use this method to check if observable is fused or not.
+    ///
+    /// ```text
+    /// Observable::new(|subscriber| {
+    ///     // ...
+    ///     if subscriber.is_fused() { ... };
+    ///     // ...
+    /// });
+    /// ```
+    pub fn is_fused(&self) -> bool {
+        println!("^^^^^^^^^^^^^^^^^^ {}", self.fused);
+        self.fused
+    }
 
     pub(crate) fn set_fused(&mut self, f: bool) {
         self.fused = f;
@@ -517,7 +530,7 @@ impl Subscription {
     /// If the observable uses asynchronous `Tokio` tasks, this method will await the
     /// completion of the task. If the observable uses OS threads, it will await the
     /// completion of the thread.
-    pub async fn join_thread_or_task(self) -> Result<(), Box<dyn Any + Send>> {
+    pub async fn join_concurrent(self) -> Result<(), Box<dyn Any + Send>> {
         match self.subscription_future {
             SubscriptionHandle::JoinTask(task_handle) => {
                 let r = task_handle.await;
@@ -544,7 +557,7 @@ impl Subscription {
     ///
     /// To await `Tokio` tasks without causing a panic, use the `join_thread_or_task`
     /// method instead.
-    pub fn join_thread(self) -> Result<(), Box<dyn Any + Send>> {
+    pub fn join(self) -> Result<(), Box<dyn Any + Send>> {
         match self.subscription_future {
             SubscriptionHandle::JoinThread(thread_handle) => thread_handle.join(),
             SubscriptionHandle::Nil => Ok(()),
