@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{observer::Observer, subscription::subscribe::UnsubscribeLogic};
+use crate::{observer::Observer, subscribe::Fuse, subscription::subscribe::UnsubscribeLogic};
 use crate::{
     subscribe::SubscriptionCollection,
     subscription::subscribe::{
@@ -459,16 +459,12 @@ impl<T> Observable<T> {
     ///
     /// # Notes
     ///
-    /// It's recommended to use `fuse()` as the first operator in the chain for
-    /// better performance. However, if you intend to use it in conjunction with the
-    /// `take()` operator, ensure that `take()` is the first operator, followed by
-    /// `fuse()`.
-    ///
-    /// Note that `fuse()` does not unsubscribe ongoing emissions from the observable;
+    /// `fuse()` does not unsubscribe ongoing emissions from the observable;
     /// it simply ignores them after the first `complete()` call, ensuring that no
     /// more values are emitted.
     pub fn fuse(mut self) -> Self {
         self.fused = true;
+        self.defused = false;
         self
     }
 
@@ -487,7 +483,7 @@ impl<T> Observable<T> {
     /// error emission. Once an error is emitted, the observable is considered closed
     /// and will not emit any further values, regardless of being defused or not.
     pub fn defuse(mut self) -> Self {
-        // self.fused = false;
+        self.fused = false;
         self.defused = true;
         self
     }
@@ -510,8 +506,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnOnce(T) -> U) + Copy + Sync + Send + 'static,
         U: 'static,
     {
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
             let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -528,9 +528,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
-            u.defused = defused;
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Filters the items emitted by the observable based on a predicate function.
@@ -542,8 +545,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         Self: Sized + Send + Sync + 'static,
         P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
     {
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
             let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -561,9 +568,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
-            u.defused = defused;
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Skips the first `n` items emitted by the observable and then emits the rest.
@@ -574,8 +584,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
             let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -596,9 +610,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
-            u.defused = defused;
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Delays the emissions from the observable by the specified number of
@@ -610,8 +627,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
             let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -628,9 +649,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
-            u.defused = defused;
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Emits at most the first `n` items emitted by the observable, then
@@ -652,9 +676,11 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
+        let (fused, defused) = self.get_fused();
         let mut i = 0;
 
-        Observable::new(move |o| {
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
             let defused = o.defused;
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
@@ -728,8 +754,8 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
-            // Propagate defuse flag.
-            u.defused = defused;
+            u.take_wrapped = true;
+            self.set_fused(fused, defused);
 
             let mut unsubscriber = self.subscribe(u);
             let ijh = unsubscriber.subscription_future;
@@ -768,7 +794,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 }
                 Receiver::OSReceiver(receiver) => {
                     std::thread::spawn(move || {
-                        // println!("---- SIGNAL received");
                         if receiver.recv().is_ok() {
                             // println!("---- SIGNAL received");
                             if let Some(s) = unsubscriber.lock().unwrap().take() {
@@ -799,7 +824,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 })),
                 ijh,
             )
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Merges the current observable with a vector of observables, emitting items
@@ -810,7 +837,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     {
         fn wrap_subscriber<S: 'static>(
             s: Arc<Mutex<Subscriber<S>>>,
+            is_fused: bool,
             is_defused: bool,
+            is_take_wrapped: bool,
         ) -> Subscriber<S> {
             let s_complete = s.clone();
             let s_error = s.clone();
@@ -826,24 +855,34 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     s_complete.lock().unwrap().complete();
                 },
             );
-            s.defused = is_defused;
+            s.take_wrapped = is_take_wrapped;
+            s.set_fused(is_fused, is_defused);
             s
         }
 
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |mut o| {
+            let take_wrapped = o.take_wrapped;
+            let fused = o.fused;
             let defused = o.defused;
+
+            o.fused = false;
+            o.defused = false;
             let o = Arc::new(Mutex::new(o));
             let mut subscriptions = Vec::with_capacity(sources.len());
 
             let mut use_tokio_task = false;
-            let s = self.subscribe(wrap_subscriber(o.clone(), defused));
+            self.set_fused(fused, defused);
+            let s = self.subscribe(wrap_subscriber(o.clone(), fused, defused, take_wrapped));
 
             if let UnsubscribeLogic::Future(_) = &s.unsubscribe_logic {
                 use_tokio_task = true;
             }
 
             for source in &mut sources {
-                let wrapped = wrap_subscriber(o.clone(), defused);
+                let wrapped = wrap_subscriber(o.clone(), fused, defused, false);
+                // source.set_fused((fused, defused));
                 let subscription = source.subscribe(wrapped);
 
                 if let UnsubscribeLogic::Future(_) = &subscription.unsubscribe_logic {
@@ -891,7 +930,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 })),
                 SubscriptionHandle::JoinSubscriptions(SubscriptionCollection::new(sc, false)),
             )
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Merges the current observable with another observable, emitting items from
@@ -902,7 +943,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     {
         fn wrap_subscriber<S: 'static>(
             s: Arc<Mutex<Subscriber<S>>>,
+            is_fused: bool,
             is_defused: bool,
+            is_take_wrapped: bool,
         ) -> Subscriber<S> {
             let s_complete = s.clone();
             let s_error = s.clone();
@@ -918,19 +961,28 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     s_complete.lock().unwrap().complete();
                 },
             );
-            s.defused = is_defused;
+            s.take_wrapped = is_take_wrapped;
+            s.set_fused(is_fused, is_defused);
             s
         }
 
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |mut o| {
+            let take_wrapped = o.take_wrapped;
+            let fused = o.fused;
             let defused = o.defused;
+
+            o.fused = false;
+            o.defused = false;
             let o = Arc::new(Mutex::new(o));
 
-            let wrapped = wrap_subscriber(o.clone(), defused);
-            let wrapped2 = wrap_subscriber(o, defused);
+            let wrapped = wrap_subscriber(o.clone(), fused, defused, take_wrapped);
+            let wrapped2 = wrap_subscriber(o, fused, defused, false);
 
             let mut use_tokio_task = false;
 
+            self.set_fused(fused, defused);
             let s1 = self.subscribe(wrapped);
             let s2 = source.subscribe(wrapped2);
 
@@ -978,7 +1030,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 })),
                 SubscriptionHandle::JoinSubscriptions(SubscriptionCollection::new(sc, false)),
             )
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Transforms the items emitted by an observable into observables, and flattens
@@ -1000,7 +1054,13 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -1009,7 +1069,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
             let mut current_subscription: Option<Subscription> = None;
 
-            let u = Subscriber::new(
+            let mut u = Subscriber::new(
                 move |v| {
                     let o_shared = Arc::clone(&o_shared);
                     let o_cloned_e = Arc::clone(&o_shared);
@@ -1045,8 +1105,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Transforms the items emitted by the source observable into other observables,
@@ -1072,14 +1136,20 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
 
             let project = Arc::clone(&project);
 
-            let u = Subscriber::new(
+            let mut u = Subscriber::new(
                 move |v| {
                     let o_shared = Arc::clone(&o_shared);
                     let o_cloned_e = Arc::clone(&o_shared);
@@ -1109,8 +1179,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Transforms the items emitted by the source observable into other observables
@@ -1137,7 +1211,13 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -1149,7 +1229,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
             let mut first_pass = true;
 
-            let u = Subscriber::new(
+            let mut u = Subscriber::new(
                 move |v| {
                     let o_shared = Arc::clone(&o_shared);
                     let o_cloned_e = Arc::clone(&o_shared);
@@ -1190,8 +1270,12 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
     }
 
     /// Maps each item emitted by the source observable to an inner observable using
@@ -1214,7 +1298,13 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
-        Observable::new(move |o| {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
             let o_shared = Arc::new(Mutex::new(o));
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
@@ -1224,7 +1314,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let active_subscription = Arc::new(Mutex::new(false));
             let guard = Arc::new(Mutex::new(true));
 
-            let u = Subscriber::new(
+            let mut u = Subscriber::new(
                 move |v| {
                     let as_cloned = Arc::clone(&active_subscription);
                     let as_cloned2 = Arc::clone(&active_subscription);
@@ -1283,8 +1373,23 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
             self.subscribe(u)
-        })
+        });
+        observable.set_fused(fused, defused);
+        observable
+    }
+}
+
+impl<T> crate::subscription::subscribe::Fuse for Observable<T> {
+    fn set_fused(&mut self, fused: bool, defused: bool) {
+        self.fused = fused;
+        self.defused = defused;
+    }
+
+    fn get_fused(&self) -> (bool, bool) {
+        (self.fused, self.defused)
     }
 }
 
@@ -1292,12 +1397,13 @@ impl<T: 'static> Subscribeable for Observable<T> {
     type ObsType = T;
 
     fn subscribe(&mut self, mut v: Subscriber<Self::ObsType>) -> Subscription {
-        if self.defused {
-            v.defused = true;
-        }
+        let (fused, defused) = v.get_fused();
 
-        if self.fused && !v.defused {
-            v.set_fused(true);
+        if defused || (fused && !self.fused) {
+            self.defused = v.defused;
+            self.fused = v.fused;
+        } else {
+            v.set_fused(self.fused, self.defused)
         }
         (self.subscribe_fn)(v)
     }

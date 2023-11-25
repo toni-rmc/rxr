@@ -40,7 +40,18 @@ impl ObjectAnother {
 
 struct SomeStruct(usize);
 
-#[tokio::main(flavor = "current_thread")]
+#[derive(Debug)]
+struct MyErr(i32);
+
+impl Display for MyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(Test emit error {:?})", self)
+    }
+}
+
+impl Error for MyErr {}
+
+#[tokio::main()]
 async fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
 
@@ -83,6 +94,10 @@ async fn main() {
                 // o.error(ObservableError::Info(ds));
                 // Important. Put an await point after each emit.
                 // sleep(Duration::from_millis(1)).await;
+                if i == 7 {
+                    o.complete();
+                }
+                // if i == 7 { o.error(Arc::new(MyErr(-1))); }
                 std::thread::sleep(Duration::from_millis(1));
             }
             o.complete();
@@ -124,6 +139,9 @@ async fn main() {
         let done_c = Arc::clone(&done);
         let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
+        if o.is_fused() {
+            println!("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFUSEDDDDDDDDDDDDDDD");
+        }
         task::spawn(async move {
             if let Some(i) = rx.recv().await {
                 *done_c.lock().unwrap() = i;
@@ -144,6 +162,9 @@ async fn main() {
                 // o.error(ObservableError::Info(ds));
                 // Important. Put an await point after each emit.
                 // sleep(Duration::from_millis(1)).await;
+                if i == 7 {
+                    o.complete();
+                }
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
             o.complete();
@@ -170,13 +191,24 @@ async fn main() {
 
     // let sb = bar("eeeeeee0".to_string(), |_| {}).subscribe(Subscriber::new(|v| println!("####### {}", v),
     //     None::<fn(_)>, None::<fn()>));
-    let us = s
-        .merge(vec![
-            bar("qqqqq".to_string(), |_| {}).map(|v| 1334).take(6),
+    let us = s2
+        .merge_one(
+            // vec![
+            // baz("qqqqq".to_string(), |_| {}).take(25).map(|v| 1334),
             // receiver_as_observable.into(),
-            baz("qqqqq".to_string(), |_| {}).map(|v| 54804).take(14),
-        ])
+            bar("qqqqq".to_string(), |_| {})
+                .take(14)
+                .map(|v| 54804)
+                // .fuse(),
+            // ]
+        )
+        .take(74)
+        // .skip(8)
+        .map(|v| v)
         .fuse()
+        .defuse()
+        // .delay(10)
+        //.fuse()
         .subscribe(o);
 
     e.next(7008);
@@ -205,24 +237,26 @@ async fn main() {
     //     // .delay(500)
     //     .merge_one(baz("".to_string(), |_| {}).map(|_| 98989898));
 
+    let mut test_fuse = bar("qqqqq".to_string(), |_| {}).fuse().defuse();
+
     // let mut test_fuse = test_fuse.take(14).defuse().delay(100);  // Try fuse() here.
 
     // test_fuse.subscribe(Subscriber::new(|x| {
     //         println!("Emitted 1: x is {}", x);
     //     },
-    //     Some(|e| { println!("error 1 {}", e); }),
-    //     Some(|| { println!("test fuse complete called 1"); }))
+    //     |e| { println!("error 1 {}", e); },
+    //     || { println!("test fuse complete called 1"); })
     // );
 
-    // let us = test_fuse.subscribe(Subscriber::new(|x| {
-    //         println!("Emitted 2: x is {}", x);
-    //     },
-    //     Some(|e| { println!("error 2 {}", e); }),
-    //     Some(|| { println!("test fuse complete called 2"); }))
-    // );
-    // Test fuse.
+    // -> let us = test_fuse.subscribe(Subscriber::new(|x| {
+    // ->         println!("Emitted 2: x is {}", x);
+    // ->     },
+    // ->     |e| { println!("error 2 {}", e); },
+    // ->     || { println!("test fuse complete called 2"); })
+    // -> );
+    // -> // Test fuse.
 
-    //us.join_thread_or_task().await;
+    // -> us.join_concurrent().await;
     // us.unsubscribe();
 
     // let handle = match us.get_handle() {
@@ -320,17 +354,6 @@ async fn main() {
     // sleep(Duration::from_secs(3)).await;
 
     // handle.observable_handle.abort();
-
-    #[derive(Debug)]
-    struct MyErr(i32);
-
-    impl Display for MyErr {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "(Test emit error {:?})", self)
-        }
-    }
-
-    impl Error for MyErr {}
 
     //  let (mut stx, mut srx) = BehaviorSubject::emitter_receiver("1".to_string());
 
@@ -528,10 +551,10 @@ fn bar(
         let last_emit_assert = Arc::clone(&last_emit_assert);
         let jh = task::spawn(async move {
             let mut last_emit = 0;
-            for i in 0..=10000000 {
+            for i in 0..=25 {
                 let v = v.clone();
                 if *done.lock().unwrap() {
-                    println!("bar() -------- UNSUBSCRIBED");
+                    println!("bar() -------- UNSUBSCRIBED, fused {}", o.is_fused());
                     break;
                 }
                 // if i == 4 {
@@ -549,6 +572,7 @@ fn bar(
             }
             v.push_str("  --");
             last_emit_assert.lock().unwrap()(v);
+            println!("======== bar() fused {}", o.is_fused());
             o.complete();
         });
 

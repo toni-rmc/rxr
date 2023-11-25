@@ -176,8 +176,14 @@ pub struct SubjectReceiver<T>(Arc<Mutex<Subject<T>>>);
 pub struct SubjectEmitter<T>(Arc<Mutex<Subject<T>>>);
 
 impl<T> SubjectReceiver<T> {
+    /// Returns the number of registered observers.
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
+    }
+
+    /// Returns `true` if no observers are registered, `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     // pub(crate) fn fuse(self) -> Self {
@@ -194,6 +200,8 @@ impl<T> SubjectReceiver<T> {
     //     self
     // }
 }
+
+impl<T> crate::subscription::subscribe::Fuse for SubjectReceiver<T> {}
 
 impl<T: 'static> Subscribeable for SubjectReceiver<T> {
     type ObsType = T;

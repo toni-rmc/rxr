@@ -195,8 +195,14 @@ pub struct AsyncSubjectReceiver<T>(Arc<Mutex<AsyncSubject<T>>>);
 pub struct AsyncSubjectEmitter<T>(Arc<Mutex<AsyncSubject<T>>>);
 
 impl<T> AsyncSubjectReceiver<T> {
+    /// Returns the number of registered observers.
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
+    }
+
+    /// Returns `true` if no observers are registered, `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     // pub(crate) fn fuse(self) -> Self {
@@ -213,6 +219,8 @@ impl<T> AsyncSubjectReceiver<T> {
     //     self
     // }
 }
+
+impl<T> crate::subscription::subscribe::Fuse for AsyncSubjectReceiver<T> {}
 
 impl<T: Clone + Send + Sync + 'static> Subscribeable for AsyncSubjectReceiver<T> {
     type ObsType = T;

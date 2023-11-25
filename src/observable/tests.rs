@@ -39,7 +39,7 @@ pub fn make_emit_u32_observable(
         Subscription::new(
             UnsubscribeLogic::Logic(Box::new(move || {
                 if let Err(_) = tx.send(true) {
-                    println!("receiver dropped");
+                    eprintln!("receiver dropped");
                 }
             })),
             SubscriptionHandle::JoinThread(jh),

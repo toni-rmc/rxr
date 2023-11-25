@@ -296,8 +296,14 @@ pub struct ReplaySubjectReceiver<T>(Arc<Mutex<ReplaySubject<T>>>);
 pub struct ReplaySubjectEmitter<T>(Arc<Mutex<ReplaySubject<T>>>);
 
 impl<T> ReplaySubjectReceiver<T> {
+    /// Returns the number of registered observers.
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
+    }
+
+    /// Returns `true` if no observers are registered, `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     // pub(crate) fn fuse(self) -> Self {
@@ -314,6 +320,8 @@ impl<T> ReplaySubjectReceiver<T> {
     //     self
     // }
 }
+
+impl<T> crate::subscription::subscribe::Fuse for ReplaySubjectReceiver<T> {}
 
 impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectReceiver<T> {
     type ObsType = T;

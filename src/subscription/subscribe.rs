@@ -12,9 +12,17 @@ use tokio::task::{self, JoinHandle};
 
 use crate::observer::Observer;
 
+pub trait Fuse {
+    fn set_fused(&mut self, _: bool, _: bool) {}
+
+    fn get_fused(&self) -> (bool, bool) {
+        (false, false)
+    }
+}
+
 /// A trait for types that can be subscribed to, allowing consumers to receive
 /// values emitted by an observable stream.
-pub trait Subscribeable {
+pub trait Subscribeable: Fuse {
     /// The type of items emitted by the observable stream.
     type ObsType;
 
@@ -75,8 +83,9 @@ pub struct Subscriber<NextFnType> {
     complete_fn: Option<Box<dyn FnMut() + Send + Sync>>,
     error_fn: Option<Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>>,
     completed: bool,
-    fused: bool,
+    pub(crate) fused: bool,
     pub(crate) defused: bool,
+    pub(crate) take_wrapped: bool,
     errored: bool,
 }
 
@@ -95,6 +104,7 @@ impl<NextFnType> Subscriber<NextFnType> {
             completed: false,
             fused: false,
             defused: false,
+            take_wrapped: false,
             errored: false,
         }
     }
@@ -111,6 +121,7 @@ impl<NextFnType> Subscriber<NextFnType> {
             completed: false,
             fused: false,
             defused: false,
+            take_wrapped: false,
             errored: false,
         }
     }
@@ -146,23 +157,50 @@ impl<NextFnType> Subscriber<NextFnType> {
     /// });
     /// ```
     pub fn is_fused(&self) -> bool {
-        println!("^^^^^^^^^^^^^^^^^^ {}", self.fused);
-        self.fused
+        self.fused && !self.defused
     }
 
-    pub(crate) fn set_fused(&mut self, f: bool) {
-        self.fused = f;
-    }
+    // pub(crate) fn set_fused(&mut self, f: bool) {
+    //     self.fused = f;
+    // }
 
     // pub(crate) fn set_defused(&mut self, d: bool) {
     //     self.defused = d;
     // }
 }
 
+impl<T> crate::subscription::subscribe::Fuse for Subscriber<T> {
+    fn set_fused(&mut self, fused: bool, defused: bool) {
+        // if fused {
+        //     self.fused = true;
+        //     self.defused = false;
+        // } else {
+        //     self.fused = false;
+        //     self.defused = true;
+        // }
+
+        // let mut wrapped = &self.wrapped;
+
+        // while let x@Some(s) = wrapped {
+        //     s.lock().unwrap().set_fused_inner(fused);
+        //     wrapped = x;
+        // }
+        self.fused = fused;
+        self.defused = defused;
+    }
+
+    fn get_fused(&self) -> (bool, bool) {
+        // self.fused && !self.defused
+        (self.fused, self.defused)
+    }
+}
+
 impl<N> Observer for Subscriber<N> {
     type NextFnType = N;
     fn next(&mut self, v: Self::NextFnType) {
-        if self.errored || (self.fused && self.completed) {
+        if (!self.take_wrapped && self.errored)
+            || (!self.take_wrapped && self.fused && self.completed)
+        {
             return;
         }
         (self.next_fn)(v);
@@ -471,12 +509,13 @@ pub enum SubscriptionHandle {
     /// No specific handle for task or thread awaiting.
     Nil,
 
-    /// Holds a join handle for awaiting an asynchronous task.
+    /// Holds a join handle for awaiting an asynchronous observable using Tokio task.
     JoinTask(JoinHandle<()>),
 
-    /// Holds a join handle for awaiting a thread.
+    /// Holds a join handle for awaiting an asynchronous observable using OS thread.
     JoinThread(ThreadJoinHandle<()>),
 
+    /// Holds a subscription collection used for awaiting all merged observables.
     JoinSubscriptions(SubscriptionCollection),
 }
 
