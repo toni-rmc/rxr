@@ -192,22 +192,22 @@ async fn main() {
     // let sb = bar("eeeeeee0".to_string(), |_| {}).subscribe(Subscriber::new(|v| println!("####### {}", v),
     //     None::<fn(_)>, None::<fn()>));
     let us = s2
-        .merge_one(
-            // vec![
-            // baz("qqqqq".to_string(), |_| {}).take(25).map(|v| 1334),
+        .merge(vec![
+            bar("qqqqq".to_string(), |_| {})
+                //.take(25)
+                .map(|v| 1334),
             // receiver_as_observable.into(),
             bar("qqqqq".to_string(), |_| {})
-                .take(14)
-                .map(|v| 54804)
-                // .fuse(),
-            // ]
-        )
+                // .take(14)
+                // .fuse()
+                .map(|v| 54804),
+        ])
+        .fuse()
         .take(74)
         // .skip(8)
-        .map(|v| v)
-        .fuse()
-        .defuse()
-        // .delay(10)
+        // .map(|v| v)
+        // .defuse()
+        // .delay(100)
         //.fuse()
         .subscribe(o);
 

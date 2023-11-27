@@ -231,7 +231,7 @@ type AwaitResult<T> = Result<T, Box<dyn Any + Send>>;
 
 pub struct SubscriptionCollection {
     subscriptions: Arc<Mutex<Option<Vec<Subscription>>>>,
-    signal_sent: Arc<RwLock<bool>>,
+    signal_sent: Arc<Mutex<bool>>,
     use_task: bool,
 }
 
@@ -239,7 +239,7 @@ impl SubscriptionCollection {
     pub(crate) fn new(s: Arc<Mutex<Option<Vec<Subscription>>>>, use_task: bool) -> Self {
         SubscriptionCollection {
             subscriptions: s,
-            signal_sent: Arc::new(RwLock::new(false)),
+            signal_sent: Arc::new(Mutex::new(false)),
             use_task,
         }
     }
@@ -264,7 +264,7 @@ impl SubscriptionCollection {
         let cl = Arc::clone(&self.signal_sent);
         std::thread::spawn(move || {
             if let Ok(true) = rx.recv() {
-                *cl.write().unwrap() = true;
+                *cl.lock().unwrap() = true;
             }
         });
 
@@ -280,7 +280,7 @@ impl SubscriptionCollection {
         use std::thread::{sleep, spawn};
 
         for mut s in subscriptions.unwrap() {
-            if *self.signal_sent.read().unwrap() {
+            if *self.signal_sent.lock().unwrap() {
                 s.unsubscribe();
                 continue;
             }
@@ -310,7 +310,7 @@ impl SubscriptionCollection {
         let local_signal = Arc::new(RwLock::new(false));
         let local_signal_cloned = Arc::clone(&local_signal);
         spawn(move || loop {
-            if *self.signal_sent.read().unwrap() {
+            if *self.signal_sent.lock().unwrap() {
                 let r = stored.pop();
                 if let Some(s) = r {
                     s.unsubscribe();
@@ -355,7 +355,7 @@ impl SubscriptionCollection {
                 // Wait for unsubscribing signal.
                 task::spawn(async move {
                     if let Some(true) = rx.recv().await {
-                        *signal_sent.write().unwrap() = true;
+                        *signal_sent.lock().unwrap() = true;
                     }
                 });
             } else {
@@ -373,7 +373,7 @@ impl SubscriptionCollection {
                 // Wait for unsubscribing signal.
                 std::thread::spawn(move || {
                     if let Ok(true) = rx.recv() {
-                        *signal_sent.write().unwrap() = true;
+                        *signal_sent.lock().unwrap() = true;
                     }
                 });
             }
@@ -389,7 +389,7 @@ impl SubscriptionCollection {
             let mut stored_threads = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
 
             for mut s in subscriptions.unwrap() {
-                if *self.signal_sent.read().unwrap() {
+                if *self.signal_sent.lock().unwrap() {
                     s.unsubscribe();
                     continue;
                 }
@@ -450,7 +450,7 @@ impl SubscriptionCollection {
                 // async observables that use OS threads.
                 std::thread::spawn(move || loop {
                     // println!("+++++++++  THREAD event loop");
-                    if *signal_sent_cl2.read().unwrap() {
+                    if *signal_sent_cl2.lock().unwrap() {
                         let r = stored_threads_subscriptions.pop();
                         if let Some(s) = r {
                             s.unsubscribe();
@@ -472,7 +472,7 @@ impl SubscriptionCollection {
             let h = task::spawn(async move {
                 loop {
                     // println!("*********  TASK event loop");
-                    if *signal_sent_cl.read().unwrap() {
+                    if *signal_sent_cl.lock().unwrap() {
                         let r = stored.pop();
                         if let Some(s) = r {
                             s.unsubscribe();

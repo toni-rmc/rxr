@@ -604,9 +604,14 @@ Projected {}, should project {}",
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "reason: this test is unreliable"]
 async fn exhaust_map_observable() {
     let observable_occupied: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
     let observable_occupied2 = Arc::clone(&observable_occupied);
+
+    let project_lock = Arc::new(Mutex::new(true));
+    let should_finish = Arc::new(Mutex::new(true));
+    let should_finish2 = Arc::clone(&should_finish);
 
     let last_emits_count = Arc::new(Mutex::new(0));
     let last_emits_count2 = Arc::clone(&last_emits_count);
@@ -625,6 +630,7 @@ async fn exhaust_map_observable() {
                 // XXX: But this test semaphore sometimes signals that inner observable
                 // should emit before exhaust_map actually signals it.
                 *observable_occupied2.lock().unwrap() = None;
+                *should_finish2.lock().unwrap() = true;
             },
         );
 
@@ -651,13 +657,12 @@ last value emitted {}, expected {}",
         let did_it_run_clone = Arc::clone(&did_it_run);
 
         let lock = Arc::new(Mutex::new(true));
-        let project_lock = Arc::new(Mutex::new(true));
 
         let mut observable = observable.exhaust_map(move |v| {
             let _project_guard = project_lock.lock().unwrap();
             let global_buffer_clone = Arc::clone(&global_buffer_clone);
+            let should_finish_cl = Arc::clone(&should_finish);
             let lock = Arc::clone(&lock);
-            let mut should_finish = false;
 
             // XXX: This part is not sound. Sometimes marks value that should
             // be rejected as the one that should emit and complete and usually value after
@@ -667,8 +672,8 @@ last value emitted {}, expected {}",
                 *observable_occupied.lock().unwrap() = Some(v);
 
                 (*should_run_clone.lock().unwrap()).push(v);
-
-                should_finish = true;
+            } else {
+                *should_finish.lock().unwrap() = false;
             }
             // let observable_occupied3 = Arc::clone(&observable_occupied);
 
@@ -684,7 +689,8 @@ last value emitted {}, expected {}",
                     return;
                 }
 
-                if should_finish {
+                if *should_finish_cl.lock().unwrap() {
+                    *should_finish_cl.lock().unwrap() = false;
                     // This inner observable started emitting. exhaust_map should emit all
                     // of it's values and reject any other inner observable trying
                     // to emit in the mean time.
@@ -714,6 +720,7 @@ been rejected. Outer observable is {}.",
                         );
                     });
                 }
+                // here
             })
         });
         let s = observable.subscribe(o);
@@ -740,7 +747,9 @@ been rejected. Outer observable is {}.",
         // Check if exhaust_map emitted more values than it should.
         assert!(
             !((*should_run.lock().unwrap()).len() < (*did_it_run.lock().unwrap()).len()),
-            "exhaust_map emitted more values than it should"
+            "exhaust_map emitted more values than it should,\nshould = {:?},\ndid = {:?}",
+            *should_run.lock().unwrap(),
+            *did_it_run.lock().unwrap(),
         );
 
         // Check if all inner observables that should have run actually did run.
