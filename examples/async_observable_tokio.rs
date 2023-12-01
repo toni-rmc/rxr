@@ -1,8 +1,7 @@
-/**
- * This `Observable` emits values and completes, returning a `Subscription` that can
- * be unsubscribed from, enabling all operators to function correctly. It uses `Tokio`
- * tasks for asynchronous processing, preventing it from blocking the current thread.
- */
+//! This `Observable` emits values and completes, returning a `Subscription` that can
+//! be unsubscribed from, enabling all operators to function correctly. It uses `Tokio`
+//! tasks for asynchronous processing, preventing it from blocking the current thread.
+
 use std::sync::{Arc, Mutex};
 
 use rxr::{

@@ -1,3 +1,5 @@
+//! Demonstrates how to use Subject emitter as an observer.
+
 use std::{fmt::Display, time::Duration};
 
 use rxr::{
@@ -15,7 +17,7 @@ pub fn create_subscriber<T: Display>(subscriber_id: u32) -> Subscriber<T> {
 
 pub fn main() {
     // Make an Observable.
-    let mut o = Observable::new(move |mut o: Subscriber<_>| {
+    let mut observable = Observable::new(move |mut o: Subscriber<_>| {
         for i in 0..10 + 1 {
             o.next(i);
             std::thread::sleep(Duration::from_millis(1));
@@ -47,5 +49,5 @@ pub fn main() {
         .subscribe(create_subscriber(3));
 
     // Convert the emitter into an observer and subscribe it to the observable.
-    o.subscribe(emitter.into());
+    observable.subscribe(emitter.into());
 }

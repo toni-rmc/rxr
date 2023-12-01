@@ -862,13 +862,13 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
         let (fused, defused) = self.get_fused();
 
-        let mut observable = Observable::new(move |mut o| {
+        let mut observable = Observable::new(move |o| {
             let take_wrapped = o.take_wrapped;
             let fused = o.fused;
             let defused = o.defused;
 
-            o.fused = false;
-            o.defused = false;
+            // o.fused = false;
+            // o.defused = false;
             let o = Arc::new(Mutex::new(o));
             let mut subscriptions = Vec::with_capacity(sources.len());
 
@@ -968,13 +968,13 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
         let (fused, defused) = self.get_fused();
 
-        let mut observable = Observable::new(move |mut o| {
+        let mut observable = Observable::new(move |o| {
             let take_wrapped = o.take_wrapped;
             let fused = o.fused;
             let defused = o.defused;
 
-            o.fused = false;
-            o.defused = false;
+            // o.fused = false;
+            // o.defused = false;
             let o = Arc::new(Mutex::new(o));
 
             let wrapped = wrap_subscriber(o.clone(), fused, defused, take_wrapped);
@@ -1403,7 +1403,7 @@ impl<T: 'static> Subscribeable for Observable<T> {
             self.defused = v.defused;
             self.fused = v.fused;
         } else {
-            v.set_fused(self.fused, self.defused)
+            v.set_fused(self.fused, self.defused);
         }
         (self.subscribe_fn)(v)
     }

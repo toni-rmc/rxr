@@ -1,10 +1,9 @@
-/**
- * This `Observable` waits for user input and emits both a value and a completion
- * signal upon success. In case of any errors, it signals them to the attached `Observer`.
- *
- * Ensure errors are wrapped in an `Arc` before passing them to the Observer's
- * `error` function.
- */
+//! This `Observable` waits for user input and emits both a value and a completion
+//! signal upon success. In case of any errors, it signals them to the attached `Observer`.
+//!
+//! Ensure errors are wrapped in an `Arc` before passing them to the Observer's
+//! `error` function.
+
 use std::{error::Error, fmt::Display, io, sync::Arc};
 
 use rxr::{subscribe::*, Observable, Observer, Subscribeable};

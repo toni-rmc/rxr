@@ -1,10 +1,15 @@
 [package]
 name = "rxr"
 version = "0.1.0"
+authors = ["Toni Romic <toni.rmc@gmail.com>"]
 edition = "2021"
+description = "Reactive extensions for event-driven applications"
+rust-version = "1.70"
 license = "MIT OR Apache-2.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+readme = "README.md"
+repository = "https://github.com/toni-rmc/rxr"
+categories = ["asynchronous", "concurrency"]
+keywords = ["observables", "subjects", "reactive", "extensions", "event-driven"]
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
