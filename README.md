@@ -15,7 +15,7 @@ For examples on how to define your Observables see the [documentation].
 
 Note that you don't have to use Tokio in your projects to use **rxr** library.<br/>
 
-[documentation]: https://docs.rs/rxr/observable/struct.Observable.html
+[documentation]: https://docs.rs/rxr/latest/rxr/observable/struct.Observable.html
 
 ## Examples
 
@@ -171,7 +171,7 @@ Additional examples can be found in both the [`examples`] directory and the
 [documentation].
 
 [`examples`]: https://github.com/toni-rmc/rxr/tree/master/examples
-[documentation]: https://docs.rs/rxr/observable/struct.Observable.html
+[documentation]: https://docs.rs/rxr/latest/rxr/observable/struct.Observable.html
 
 ## Installation
 
