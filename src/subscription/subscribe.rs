@@ -12,6 +12,7 @@ use tokio::task::{self, JoinHandle};
 
 use crate::observer::Observer;
 
+#[doc(hidden)]
 pub trait Fuse {
     fn set_fused(&mut self, _: bool, _: bool) {}
 
@@ -195,8 +196,8 @@ impl<T> crate::subscription::subscribe::Fuse for Subscriber<T> {
     }
 }
 
-impl<N> Observer for Subscriber<N> {
-    type NextFnType = N;
+impl<T> Observer for Subscriber<T> {
+    type NextFnType = T;
     fn next(&mut self, v: Self::NextFnType) {
         if (!self.take_wrapped && self.errored)
             || (!self.take_wrapped && self.fused && self.completed)
