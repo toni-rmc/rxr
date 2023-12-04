@@ -1,6 +1,6 @@
 [package]
 name = "rxr"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Toni Romic <toni.rmc@gmail.com>"]
 edition = "2021"
 description = "Reactive extensions for event-driven applications"

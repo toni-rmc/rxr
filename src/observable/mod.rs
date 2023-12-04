@@ -475,7 +475,7 @@ impl<T> Observable<T> {
     /// completion and allowing multiple calls to `complete()`. Calling `defuse()` is
     /// not necessary unless the observable has been previously fused using
     /// [`fuse()`](#method.fuse). Once an observable is defused, it can emit values
-    /// and call `complete()` multiple times on it's observers.
+    /// and call `complete()` multiple times on its observers.
     ///
     /// # Notes
     ///
@@ -730,7 +730,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         o_shared.lock().unwrap().next(v);
                     } else if !signal_sent {
                         signal_sent = true;
-                        // Check which channel is used and use it's sender to send
+                        // Check which channel is used and use its sender to send
                         // unsubscribe signal.
                         if use_tokio {
                             if let Ok(h) = &tokio_handle {
@@ -778,7 +778,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
             let u_cloned = Arc::clone(&unsubscriber);
 
-            // Check which channel is used and use it's receiver to receive
+            // Check which channel is used and use its receiver to receive
             // unsubscribe signal.
             match rx {
                 Receiver::TokioReceiver(mut receiver) => {
@@ -787,6 +787,214 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                             // println!("SIGNAL received");
                             if let Some(s) = unsubscriber.lock().unwrap().take() {
                                 // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
+                        }
+                    });
+                }
+                Receiver::OSReceiver(receiver) => {
+                    std::thread::spawn(move || {
+                        if receiver.recv().is_ok() {
+                            // println!("---- SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
+                        }
+                    });
+                }
+            };
+
+            if is_future {
+                return Subscription::new(
+                    UnsubscribeLogic::Future(Box::pin(async move {
+                        if let Some(s) = u_cloned.lock().unwrap().take() {
+                            s.unsubscribe();
+                        }
+                    })),
+                    ijh,
+                );
+            }
+
+            Subscription::new(
+                UnsubscribeLogic::Logic(Box::new(move || {
+                    if let Some(s) = u_cloned.lock().unwrap().take() {
+                        s.unsubscribe();
+                    }
+                })),
+                ijh,
+            )
+        });
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Continuously emits the values from the source Observable until an event occurs,
+    /// triggered by an emitted value from a separate notifier Observable.
+    ///
+    /// The `takeUntil` function subscribes to and starts replicating the behavior of
+    /// the source Observable. Simultaneously, it observes a second Observable,
+    /// referred to as the notifier, provided by the user. When the notifier emits a
+    /// value, the resulting Observable stops replicating the source Observable and
+    /// completes. If the notifier completes without emitting any value, `takeUntil`
+    /// will pass all values from the source Observable.
+    ///
+    /// The `take_until` function accepts a second parameter, `unsubscribe_notifier`,
+    /// allowing control over whether `takeUntil` will attempt to unsubscribe from
+    /// emissions of the notifier Observable. When set to `true`, `takeUntil` actively
+    /// attempts to unsubscribe from the notifier's emissions. When set to `false,
+    /// `takeUntil` refrains from attempting to unsubscribe from the notifier,
+    /// allowing the emissions to continue unaffected.
+    fn take_until<U: 'static>(
+        mut self,
+        notifier: Observable<U>,
+        unsubscribe_notifier: bool,
+    ) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+    {
+        let notifier = Arc::new(Mutex::new(notifier));
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let mut use_tokio = false;
+            let mut is_current = false;
+            let tx;
+            let rx;
+
+            // Check if Tokio runtime is used.
+            let tokio_handle = tokio::runtime::Handle::try_current();
+            if let Ok(t) = &tokio_handle {
+                // If it is check if runtime flavor is `current_thread`.
+                if let tokio::runtime::RuntimeFlavor::CurrentThread = t.runtime_flavor() {
+                    is_current = true;
+                }
+            }
+            // Open non-blocking channel only if Tokio is used and runtime flavor is
+            // not `current_thread.`
+            if let (Ok(_), false) = (&tokio_handle, is_current) {
+                let (sender, receiver) = tokio::sync::mpsc::channel(10);
+                tx = Sender::TokioSender(sender);
+                rx = Receiver::TokioReceiver(receiver);
+                use_tokio = true;
+            } else {
+                // Tokio runtime flavor is `current_thread` or Tokio is not used at
+                // all; open `std` sync channel.
+                let (sender, receiver) = std::sync::mpsc::channel();
+                tx = Sender::OSSender(sender);
+                rx = Receiver::OSReceiver(receiver);
+            }
+            let mut signal_sent = false;
+
+            let notifier_next_called = Arc::new(Mutex::new(false));
+            let notifier_next_called_cl = Arc::clone(&notifier_next_called);
+
+            // Make an inner Observer which will set `notifier called` flag.
+            let observer =
+                Subscriber::on_next(move |_: U| *notifier_next_called_cl.lock().unwrap() = true);
+
+            let notifier = Arc::clone(&notifier);
+            let subscription = Arc::new(Mutex::new(None));
+            let subscription_cl = Arc::clone(&subscription);
+
+            if use_tokio || is_current {
+                tokio::task::spawn(async move {
+                    let subscription = notifier.lock().unwrap().subscribe(observer);
+                    *subscription_cl.lock().unwrap() = Some(subscription);
+                });
+            } else {
+                std::thread::spawn(move || {
+                    let subscription = notifier.lock().unwrap().subscribe(observer);
+                    *subscription_cl.lock().unwrap() = Some(subscription);
+                });
+            }
+
+            // Alternative implementation for Subject's if desired behavior is to
+            // skip call to unsubscribe() when take() operator is used. This might be
+            // used for performance reasons because opening a channel and spawning a
+            // new thread can be skipped when this operator is used on Subject's.
+            if self.is_subject() {
+                signal_sent = true;
+            }
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    if !(*notifier_next_called.lock().unwrap()) {
+                        o_shared.lock().unwrap().next(v);
+                    } else if !signal_sent {
+                        signal_sent = true;
+                        // Check which channel is used and use its sender to send
+                        // unsubscribe signal.
+                        if use_tokio {
+                            if let Ok(h) = &tokio_handle {
+                                if let Sender::TokioSender(s) = &tx {
+                                    let s = s.clone();
+                                    h.spawn(async move {
+                                        s.send(true).await.unwrap();
+                                    });
+                                }
+                            }
+                        } else if let Sender::OSSender(s) = &tx {
+                            let s = s.clone();
+                            let _ = s.send(true);
+                        }
+                        if unsubscribe_notifier {
+                            if let Some(s) = subscription.lock().unwrap().take() {
+                                s.unsubscribe();
+                            }
+                        }
+                    } else if unsubscribe_notifier {
+                        if let Some(s) = subscription.lock().unwrap().take() {
+                            s.unsubscribe();
+                        }
+                    }
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = true;
+            self.set_fused(fused, defused);
+
+            let mut unsubscriber = self.subscribe(u);
+            let ijh = unsubscriber.subscription_future;
+            unsubscriber.subscription_future = SubscriptionHandle::Nil;
+
+            if self.is_subject() {
+                // Skip opening a thread or a task if this method is called
+                // on one of the Subject's.
+                return Subscription::new(
+                    UnsubscribeLogic::Logic(Box::new(move || {
+                        unsubscriber.unsubscribe();
+                    })),
+                    ijh,
+                );
+            }
+            let mut is_future = false;
+            if let UnsubscribeLogic::Future(_) = &unsubscriber.unsubscribe_logic {
+                is_future = true;
+            };
+            let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
+            let u_cloned = Arc::clone(&unsubscriber);
+
+            // Check which channel is used and use its receiver to receive
+            // unsubscribe signal.
+            match rx {
+                Receiver::TokioReceiver(mut receiver) => {
+                    tokio::task::spawn(async move {
+                        if receiver.recv().await.is_some() {
+                            // println!("SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE Tokio called");
                                 s.unsubscribe();
                             }
                         }
@@ -1350,7 +1558,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                             o_cloned_c.lock().unwrap().complete();
 
                             // Mark this inner subscription as completed so that next
-                            // one can be allowed to emit all of it's values.
+                            // one can be allowed to emit all of its values.
                             *as_cloned2.lock().unwrap() = false;
                         },
                     );

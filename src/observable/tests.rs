@@ -136,7 +136,7 @@ last value emitted {}, expected {}",
                 if *should_finish_cl.lock().unwrap() {
                     *should_finish_cl.lock().unwrap() = false;
                     // This inner observable started emitting. exhaust_map should emit all
-                    // of it's values and reject any other inner observable trying
+                    // of its values and reject any other inner observable trying
                     // to emit in the mean time.
                     *global_buffer_clone.lock().unwrap() = catch_unwind(|| {
                         assert!(
@@ -157,7 +157,7 @@ Last emitted inner value is {} but it should have reached {}",
                             last_emit_inner_value < inner_o_max_count,
                             "exhaust_map did not unsubscribed inner observable properly.
 It finished emitting inner observable that should be rejected because other inner observable
-was emitting it's values. Inner observable reached it's last value {} but should have
+was emitting its values. Inner observable reached its last value {} but should have
 been rejected. Outer observable is {}.",
                             last_emit_inner_value,
                             v

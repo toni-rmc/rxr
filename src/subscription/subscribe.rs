@@ -303,7 +303,7 @@ impl SubscriptionCollection {
                     stored_tasks.push(h);
                 }
                 SubscriptionHandle::JoinTask(..) => {
-                    panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_thread_or_task().await` to await the completion of observables.");
+                    panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_concurrent().await` to await the completion of observables.");
                 }
             }
         }
@@ -595,7 +595,7 @@ impl Subscription {
     ///
     /// If this method is used to await a `Tokio` task, it will panic.
     ///
-    /// To await `Tokio` tasks without causing a panic, use the `join_thread_or_task`
+    /// To await `Tokio` tasks without causing a panic, use the `join_concurrent().await`
     /// method instead.
     pub fn join(self) -> Result<(), Box<dyn Any + Send>> {
         match self.subscription_future {
@@ -603,7 +603,7 @@ impl Subscription {
             SubscriptionHandle::Nil => Ok(()),
             SubscriptionHandle::JoinSubscriptions(s) => s.join_all(),
             SubscriptionHandle::JoinTask(_) => {
-                panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_thread_or_task().await` to await the completion of observables.")
+                panic!("Handle should be OS thread handle but it is Tokio task handle instead. When working with Tokio, use `join_concurrent().await` to await the completion of observables.")
             }
         }
     }

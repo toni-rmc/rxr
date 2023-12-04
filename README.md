@@ -12,10 +12,12 @@ a smaller subset of operators compared to RxJS.
 functionality you want. Your Observables can be synchronous or asynchronous. For
 asynchronous Observables, you can utilize OS threads or Tokio tasks.<br/>
 For examples on how to define your Observables see the [documentation].
+To see what operators are currently implemented check the [ObservableExt] trait.
 
 Note that you don't have to use Tokio in your projects to use **rxr** library.<br/>
 
 [documentation]: https://docs.rs/rxr/latest/rxr/observable/struct.Observable.html
+[ObservableExt]: https://docs.rs/rxr/latest/rxr/observable/trait.ObservableExt.html
 
 ## Examples
 
@@ -131,7 +133,7 @@ pub fn create_subscriber<T: Display>(subscriber_id: u32) -> Subscriber<T> {
 
 pub fn main() {
     // Make an Observable.
-    let mut o = Observable::new(move |mut o: Subscriber<_>| {
+    let mut observable = Observable::new(move |mut o: Subscriber<_>| {
         for i in 0..10 + 1 {
             o.next(i);
             std::thread::sleep(Duration::from_millis(1));
@@ -163,7 +165,7 @@ pub fn main() {
         .subscribe(create_subscriber(3));
 
     // Convert the emitter into an observer and subscribe it to the observable.
-    o.subscribe(emitter.into());
+    observable.subscribe(emitter.into());
 }
 ```
 
@@ -179,7 +181,7 @@ Add a line into your Cargo.toml:
 
 ```toml
 [dependencies]
-rxr = "0.1.0"
+rxr = "0.1.2"
 ```
 
 ## License

@@ -73,7 +73,7 @@ last value emitted {}, expected {}",
                             last_emit_inner_value < inner_o_max_count,
                             "switch_map did not unsubscribed inner observable properly.
 Outer value is {} which is not last value emitted by outer observable. Inner observable reached
-{} which is it's last value",
+{} which is its last value",
                             v,
                             last_emit_inner_value
                         );
@@ -81,7 +81,7 @@ Outer value is {} which is not last value emitted by outer observable. Inner obs
                 } else {
                     // Outer observable emitted value is outer_o_max_count which is last value and
                     // switch_map should not unsubscribe it consequently last inner
-                    // observable subscribed should emit all it's values.
+                    // observable subscribed should emit all its values.
                     *global_buffer_clone.lock().unwrap() = catch_unwind(|| {
                         assert!(
                             v == outer_o_max_count,
@@ -92,7 +92,7 @@ than it should. Expected {}, found {}",
                         );
                         assert!(
                             last_emit_inner_value == inner_o_max_count,
-                            "last inner observable should have emitted all of it's values.
+                            "last inner observable should have emitted all of its values.
 Expected {}, found {}",
                             inner_o_max_count,
                             last_emit_inner_value
@@ -238,7 +238,7 @@ last value emitted {}, expected {}",
                 // are they started in sequential order e.g. 1 can start before 0.
 
                 *global_buffer_clone.lock().unwrap() = catch_unwind(|| {
-                    // Every inner observable should finish emitting all of it's values.
+                    // Every inner observable should finish emitting all of its values.
                     assert!(
                         last_emit_inner_value == inner_o_max_count,
                         "concat_map should emit all values for this inner observable.
@@ -366,7 +366,7 @@ last value emitted {}, expected {}",
                 *global_buffer_clone.lock().unwrap() = catch_unwind(|| {
                     assert!(
                         last_emit_inner_value == inner_o_max_count,
-                        "inner observable should have emitted all of it's values.
+                        "inner observable should have emitted all of its values.
 Expected {}, found {}",
                         inner_o_max_count,
                         last_emit_inner_value

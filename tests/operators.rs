@@ -1,7 +1,8 @@
 mod generate_observable;
 
-use generate_observable::generate_u32_observable;
+use generate_observable::{generate_u32_observable, generate_u32_observable_async};
 use std::{
+    panic::{catch_unwind, resume_unwind},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -357,6 +358,192 @@ is {} and last emitted value is {}",
         last_emit_value.lock().unwrap().completed,
         "take operator did not completed observable"
     );
+}
+
+#[test]
+fn take_until_observable_unsubscribe_notifier() {
+    let observable_result = Arc::new(Mutex::new(Ok(())));
+    let notifier_result = Arc::new(Mutex::new(Ok(())));
+
+    // Open inner scope to shorten the lifetimes of observable_result_clone and notifier_result_clone.
+    {
+        let observable_result_clone = Arc::clone(&observable_result);
+        let notifier_result_clone = Arc::clone(&notifier_result);
+        let outer_o_max_count = 100;
+        let inner_o_max_count = 20;
+
+        // Chaining the notifier observable with `delay()` to allow the main observable
+        // sufficient time to emit some values before notifier cancels subscription.
+        let notifier =
+            generate_u32_observable(inner_o_max_count, move |notifier_last_emit_value| {
+                // Check the last value emitted by the notifier observable.
+                *notifier_result_clone.lock().unwrap() = catch_unwind(|| {
+                    assert!(
+                        notifier_last_emit_value < inner_o_max_count,
+                        "notifier should have been stopped emitting all of its values by `take_until()`.
+Emitted {} which is its last value", notifier_last_emit_value 
+                );
+                });
+            })
+            .delay(40);
+
+        let subscriber = Subscriber::on_next(|_| {});
+
+        let observable = generate_u32_observable(outer_o_max_count, move |last_emit_value| {
+            // Check the last value emitted by the notifier observable.
+            *observable_result_clone.lock().unwrap() = catch_unwind(|| {
+                assert!(
+                    last_emit_value < outer_o_max_count,
+                    "observable should have been stopped emitting all of its values by notifier.
+Emitted {} which is its last value",
+                    last_emit_value
+                );
+            });
+        });
+
+        // Pass `true` to `take_until()` so outer observable unsubscribes notifier too.
+        let subscription = observable.take_until(notifier, true).subscribe(subscriber);
+
+        // Wait for outer observable to complete.
+        if let Err(e) = subscription.join() {
+            resume_unwind(e);
+        }
+    }
+    // Give some time to make sure notifier observable is finished if not stopped.
+    std::thread::sleep(Duration::from_millis(4000));
+
+    let m = Arc::into_inner(notifier_result).unwrap();
+    let m = m.into_inner().unwrap();
+
+    if let Err(e) = m {
+        resume_unwind(e);
+    };
+
+    let m = Arc::into_inner(observable_result).unwrap();
+    let m = m.into_inner().unwrap();
+
+    if let Err(e) = m {
+        resume_unwind(e);
+    };
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn take_until_observable_do_not_unsubscribe_notifier() {
+    let observable_result = Arc::new(Mutex::new(Ok(())));
+    let notifier_result = Arc::new(Mutex::new(Ok(())));
+
+    // Open inner scope to shorten the lifetimes of observable_result_clone and notifier_result_clone.
+    {
+        let observable_result_clone = Arc::clone(&observable_result);
+        let notifier_result_clone = Arc::clone(&notifier_result);
+        let outer_o_max_count = 100;
+        let inner_o_max_count = 40;
+
+        // Chaining the notifier observable with `delay()` to allow the main observable
+        // sufficient time to emit some values before notifier cancels subscription.
+        let notifier =
+            generate_u32_observable_async(inner_o_max_count, move |notifier_last_emit_value| {
+                // Check the last value emitted by the notifier observable.
+                *notifier_result_clone.lock().unwrap() = catch_unwind(|| {
+                    assert!(
+                        notifier_last_emit_value == inner_o_max_count,
+                        "notifier should have emit all of its values.
+Emitted {} which is not its last value",
+                        notifier_last_emit_value
+                    );
+                });
+            })
+            .await
+            .delay(20);
+
+        let subscriber = Subscriber::on_next(|_| {});
+
+        let observable = generate_u32_observable_async(outer_o_max_count, move |last_emit_value| {
+            // Check the last value emitted by the notifier observable.
+            *observable_result_clone.lock().unwrap() = catch_unwind(|| {
+                assert!(
+                    last_emit_value < outer_o_max_count,
+                    "observable should have been stopped emitting all of its values by notifier.
+Emitted {} which is its last value",
+                    last_emit_value
+                );
+            });
+        })
+        .await;
+
+        // Using `false` with `take_until()` to avoid unsubscribing the notifier observable.
+        let subscription = observable.take_until(notifier, false).subscribe(subscriber);
+
+        // Wait for outer observable to complete.
+        if let Err(e) = subscription.join_concurrent().await {
+            resume_unwind(e);
+        }
+    }
+    // Give some time to make sure notifier observable is finished if not stopped.
+    tokio::time::sleep(Duration::from_millis(4000)).await;
+
+    let m = Arc::into_inner(notifier_result).unwrap();
+    let m = m.into_inner().unwrap();
+
+    if let Err(e) = m {
+        resume_unwind(e);
+    };
+
+    let m = Arc::into_inner(observable_result).unwrap();
+    let m = m.into_inner().unwrap();
+
+    if let Err(e) = m {
+        resume_unwind(e);
+    };
+}
+
+#[test]
+fn take_until_observable_with_subject_notifier() {
+    let observable_result = Arc::new(Mutex::new(Ok(())));
+
+    // Open inner scope to shorten the lifetime of observable_result_clone.
+    {
+        let observable_result_clone = Arc::clone(&observable_result);
+        let outer_o_max_count = 100;
+
+        let subscriber = Subscriber::on_next(|_| {});
+
+        let observable = generate_u32_observable(outer_o_max_count, move |last_emit_value| {
+            // Check the last value emitted by the notifier observable.
+            *observable_result_clone.lock().unwrap() = catch_unwind(|| {
+                assert!(
+                    last_emit_value < outer_o_max_count,
+                    "observable should have been stopped emitting all of its values by notifier.
+Emitted {} which is its last value",
+                    last_emit_value
+                );
+            });
+        });
+        let (mut emitter, notifier) = rxr::subjects::Subject::<()>::emitter_receiver();
+
+        // Pass `false` to `take_until()` so it doesn't unsubscribe the subject.
+        let subscription = observable
+            .take_until(notifier.into(), false)
+            .subscribe(subscriber);
+
+        // Give some time to make sure observable can emit some values before unsubscribing.
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Emitting a value to signal the notifier to cease observable emissions.
+        emitter.next(());
+
+        // Wait for outer observable to complete.
+        if let Err(e) = subscription.join() {
+            resume_unwind(e);
+        }
+    }
+
+    let m = Arc::into_inner(observable_result).unwrap();
+    let m = m.into_inner().unwrap();
+
+    if let Err(e) = m {
+        resume_unwind(e);
+    };
 }
 
 #[test]
