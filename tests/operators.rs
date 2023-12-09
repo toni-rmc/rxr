@@ -547,6 +547,108 @@ Emitted {} which is its last value",
 }
 
 #[test]
+fn take_last_observable() {
+    let values = Arc::new(Mutex::new(Vec::with_capacity(25)));
+    let values_cl = Arc::clone(&values);
+    let values_cl2 = Arc::clone(&values);
+    let values_cl3 = Arc::clone(&values);
+    let values_cl4 = Arc::clone(&values);
+
+    let s = Subscriber::on_next(move |v| values_cl.lock().unwrap().push(v));
+    let o = generate_u32_observable(100, |_| {});
+
+    let subscription = o.take_last(4).subscribe(s);
+
+    subscription.join().unwrap();
+
+    // Take some last values.
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[97, 98, 99, 100],
+        "take_last operator failed to correctly retrieve the last values"
+    );
+
+    let s = Subscriber::on_next(move |v| values_cl2.lock().unwrap().push(v));
+    let o = generate_u32_observable(20, |_| {});
+
+    let subscription = o.take_last(0).subscribe(s);
+
+    subscription.join().unwrap();
+
+    // Do not take any values.
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[97, 98, 99, 100],
+        "take_last operator failed to correctly retrieve no values"
+    );
+
+    let s = Subscriber::on_next(move |v| values_cl3.lock().unwrap().push(v));
+    let o = generate_u32_observable(20, |_| {});
+
+    let subscription = o.take_last(1).subscribe(s);
+
+    subscription.join().unwrap();
+
+    // Take one value.
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[97, 98, 99, 100, 20],
+        "take_last operator failed to correctly retrieve the one last value"
+    );
+
+    let s = Subscriber::on_next(move |v| values_cl4.lock().unwrap().push(v));
+    let o = generate_u32_observable(4, |_| {});
+
+    let subscription = o.take_last(5).subscribe(s);
+
+    subscription.join().unwrap();
+
+    // Take all values.
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[97, 98, 99, 100, 20, 0, 1, 2, 3, 4],
+        "take_last operator failed to correctly retrieve all values"
+    );
+}
+
+#[test]
+fn take_while_observable() {
+    let values = Arc::new(Mutex::new(Vec::with_capacity(10)));
+    let values_cl = Arc::clone(&values);
+
+    let s = Subscriber::on_next(move |v| values_cl.lock().unwrap().push(v));
+    let o = generate_u32_observable(25, |last_emit_value| {
+        assert!(
+            last_emit_value < 10,
+            "take_while failed to unsubscribe background emissions, last emitted value is {} but should be less than 10",
+            last_emit_value
+        );
+    });
+
+    let subscription = o
+        .take_while(|v| {
+            if v < &6 {
+                return true;
+            }
+            false
+        })
+        .subscribe(s);
+
+    if let Err(e) = subscription.join() {
+        // Check if task in observable panicked.
+        // If yes, resume and unwind panic to make the test fail with
+        // proper error message.
+        std::panic::resume_unwind(e);
+    };
+
+    assert_eq!(
+        *values.lock().unwrap(),
+        &[0, 1, 2, 3, 4, 5],
+        "take_while operator failed to emit last values correctly"
+    );
+}
+
+#[test]
 fn merge_observable() {
     let values = Arc::new(Mutex::new(Vec::with_capacity(25)));
     let values_cl = Arc::clone(&values);

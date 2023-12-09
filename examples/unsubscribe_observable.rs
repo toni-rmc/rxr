@@ -37,7 +37,6 @@ fn main() {
                 if *done.lock().unwrap() == UNSUBSCRIBE_SIGNAL {
                     break;
                 }
-                println!("----------- {}", i);
                 // Emit the value to the subscriber.
                 o.next(i);
                 // Important. Put an await point after each emit or after some emits.

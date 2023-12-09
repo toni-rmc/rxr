@@ -742,7 +742,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                                 }
                             }
                         } else if let Sender::OSSender(s) = &tx {
-                            let s = s.clone();
                             let _ = s.send(true);
                         }
                     }
@@ -829,22 +828,24 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         observable
     }
 
-    /// Continuously emits the values from the source Observable until an event occurs,
-    /// triggered by an emitted value from a separate notifier Observable.
+    /// Continuously emits the values from the source observable until an event occurs,
+    /// triggered by an emitted value from a separate `notifier` observable.
     ///
-    /// The `takeUntil` function subscribes to and starts replicating the behavior of
-    /// the source Observable. Simultaneously, it observes a second Observable,
-    /// referred to as the notifier, provided by the user. When the notifier emits a
-    /// value, the resulting Observable stops replicating the source Observable and
-    /// completes. If the notifier completes without emitting any value, `takeUntil`
-    /// will pass all values from the source Observable.
+    /// The `takeUntil` operator subscribes to and starts replicating the behavior of
+    /// the source observable. Simultaneously, it observes a second observable,
+    /// referred to as the `notifier`, provided by the user. When the `notifier` emits
+    /// a value, the resulting observable stops replicating the source observable and
+    /// completes. If the `notifier` completes without emitting any value, `takeUntil`
+    /// will pass all values from the source observable. When the `notifier` triggers
+    /// its first emission `take_until` unsubscribes from ongoing emissions of the
+    /// source observable.
     ///
-    /// The `take_until` function accepts a second parameter, `unsubscribe_notifier`,
+    /// The `take_until` operator accepts a second parameter, `unsubscribe_notifier`,
     /// allowing control over whether `takeUntil` will attempt to unsubscribe from
-    /// emissions of the notifier Observable. When set to `true`, `takeUntil` actively
-    /// attempts to unsubscribe from the notifier's emissions. When set to `false,
-    /// `takeUntil` refrains from attempting to unsubscribe from the notifier,
-    /// allowing the emissions to continue unaffected.
+    /// emissions of the `notifier` observable. When set to `true`, `takeUntil`
+    /// actively attempts to unsubscribe from the `notifier`'s emissions. When set to
+    /// `false`, `takeUntil` refrains from attempting to unsubscribe from the
+    /// `notifier`, allowing the emissions to continue unaffected.
     fn take_until<U: 'static>(
         mut self,
         notifier: Observable<U>,
@@ -941,7 +942,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                                 }
                             }
                         } else if let Sender::OSSender(s) = &tx {
-                            let s = s.clone();
                             let _ = s.send(true);
                         }
                         if unsubscribe_notifier {
@@ -1032,6 +1032,243 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 })),
                 ijh,
             )
+        });
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Continues emitting values from the source observable as long as each value
+    /// meets the specified `predicate` criteria. The operation concludes immediately
+    /// upon encountering the first value that doesn't satisfy the `predicate`.
+    ///
+    /// Upon subscription, `takeWhile` starts replicating the source observable.
+    /// Every emitted value from the source is evaluated by the `predicate` function,
+    /// returning a boolean that represents a condition for the source values. The
+    /// resulting observable continues emitting source values until the `predicate`
+    /// yields `false`. When the specified condition is no longer met, `takeWhile`
+    /// ceases mirroring the source, subsequently unsubscribing from the source to
+    /// stop background emissions.
+    fn take_while<P>(mut self, predicate: P) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+        P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
+    {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let mut use_tokio = false;
+            let mut is_current = false;
+            let tx;
+            let rx;
+
+            // Check if Tokio runtime is used.
+            let tokio_handle = tokio::runtime::Handle::try_current();
+            if let Ok(t) = &tokio_handle {
+                // If it is check if runtime flavor is `current_thread`.
+                if let tokio::runtime::RuntimeFlavor::CurrentThread = t.runtime_flavor() {
+                    is_current = true;
+                }
+            }
+            // Open non-blocking channel only if Tokio is used and runtime flavor is
+            // not `current_thread.`
+            if let (Ok(_), false) = (&tokio_handle, is_current) {
+                let (sender, receiver) = tokio::sync::mpsc::channel(10);
+                tx = Sender::TokioSender(sender);
+                rx = Receiver::TokioReceiver(receiver);
+                use_tokio = true;
+            } else {
+                // Tokio runtime flavor is `current_thread` or Tokio is not used at
+                // all; open `std` sync channel.
+                let (sender, receiver) = std::sync::mpsc::channel();
+                tx = Sender::OSSender(sender);
+                rx = Receiver::OSReceiver(receiver);
+            }
+            let mut signal_sent = false;
+
+            // Alternative implementation for Subject's if desired behavior is to
+            // skip call to unsubscribe() when take() operator is used. This might be
+            // used for performance reasons because opening a channel and spawning a
+            // new thread can be skipped when this operator is used on Subject's.
+            if self.is_subject() {
+                signal_sent = true;
+            }
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    if predicate(&v) {
+                        o_shared.lock().unwrap().next(v);
+                    } else if !signal_sent {
+                        signal_sent = true;
+                        // Check which channel is used and use its sender to send
+                        // unsubscribe signal.
+                        if use_tokio {
+                            if let Ok(h) = &tokio_handle {
+                                if let Sender::TokioSender(s) = &tx {
+                                    let s = s.clone();
+                                    h.spawn(async move {
+                                        s.send(true).await.unwrap();
+                                    });
+                                }
+                            }
+                        } else if let Sender::OSSender(s) = &tx {
+                            let _ = s.send(true);
+                        }
+                    }
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = true;
+            self.set_fused(fused, defused);
+
+            let mut unsubscriber = self.subscribe(u);
+            let ijh = unsubscriber.subscription_future;
+            unsubscriber.subscription_future = SubscriptionHandle::Nil;
+
+            if self.is_subject() {
+                // Skip opening a thread or a task if this method is called
+                // on one of the Subject's.
+                return Subscription::new(
+                    UnsubscribeLogic::Logic(Box::new(move || {
+                        unsubscriber.unsubscribe();
+                    })),
+                    ijh,
+                );
+            }
+            let mut is_future = false;
+            if let UnsubscribeLogic::Future(_) = &unsubscriber.unsubscribe_logic {
+                is_future = true;
+            };
+            let unsubscriber = Arc::new(Mutex::new(Some(unsubscriber)));
+            let u_cloned = Arc::clone(&unsubscriber);
+
+            // Check which channel is used and use its receiver to receive
+            // unsubscribe signal.
+            match rx {
+                Receiver::TokioReceiver(mut receiver) => {
+                    tokio::task::spawn(async move {
+                        if receiver.recv().await.is_some() {
+                            // println!("SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
+                        }
+                    });
+                }
+                Receiver::OSReceiver(receiver) => {
+                    std::thread::spawn(move || {
+                        if receiver.recv().is_ok() {
+                            // println!("---- SIGNAL received");
+                            if let Some(s) = unsubscriber.lock().unwrap().take() {
+                                // println!("UNSUBSCRIBE called");
+                                s.unsubscribe();
+                            }
+                        }
+                    });
+                }
+            };
+
+            if is_future {
+                return Subscription::new(
+                    UnsubscribeLogic::Future(Box::pin(async move {
+                        if let Some(s) = u_cloned.lock().unwrap().take() {
+                            s.unsubscribe();
+                        }
+                    })),
+                    ijh,
+                );
+            }
+
+            Subscription::new(
+                UnsubscribeLogic::Logic(Box::new(move || {
+                    if let Some(s) = u_cloned.lock().unwrap().take() {
+                        s.unsubscribe();
+                    }
+                })),
+                ijh,
+            )
+        });
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Produces an observable that emits, at maximum, the final `count` values
+    /// emitted by the source observable.
+    ///
+    /// Utilizing `takeLast` creates an observable that retains up to 'count' values
+    /// in memory until the source observable completes. Upon completion, it delivers
+    /// all stored values in their original order to the consumer and signals completion.
+    ///
+    /// In scenarios where the source completes before reaching the specified `count`
+    /// in `takeLast`, it emits all received values up to that point and then signals completion.
+    ///
+    /// # Notes
+    ///
+    /// When applied to an observable that never completes, `takeLast` yields an
+    /// observable that doesn't emit any value.
+    fn take_last(mut self, count: usize) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+        T: Send,
+    {
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let last_values_buffer = Arc::new(Mutex::new(VecDeque::with_capacity(count)));
+            let last_values_buffer_cl = Arc::clone(&last_values_buffer);
+
+            let fused = o.fused;
+            let defused = o.defused;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let i = Arc::new(Mutex::new(0));
+            let i_cl = Arc::clone(&i);
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    if count == 0 {
+                        return;
+                    }
+                    if let (Ok(mut counter), Ok(mut last_values_buffer)) =
+                        (i.lock(), last_values_buffer_cl.lock())
+                    {
+                        *counter += 1;
+                        if *counter > count {
+                            last_values_buffer.pop_front();
+                        }
+                        last_values_buffer.push_back(v);
+                    }
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    if let (Ok(mut o), Ok(mut last_values_buffer)) =
+                        (o_shared.lock(), last_values_buffer.lock())
+                    {
+                        while let Some(item) = last_values_buffer.pop_front() {
+                            o.next(item);
+                        }
+                        let _ = i_cl.lock().map(|mut counter| *counter = 0);
+                        o.complete();
+                    }
+                },
+            );
+            u.take_wrapped = true;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
         });
         observable.set_fused(fused, defused);
         observable

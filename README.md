@@ -59,7 +59,6 @@ fn main() {
                 if *done.lock().unwrap() == UNSUBSCRIBE_SIGNAL {
                     break;
                 }
-                println!("----------- {}", i);
                 // Emit the value to the subscriber.
                 o.next(i);
                 // Important. Put an await point after each emit or after some emits.
@@ -181,7 +180,7 @@ Add a line into your Cargo.toml:
 
 ```toml
 [dependencies]
-rxr = "0.1.2"
+rxr = "0.1.3"
 ```
 
 ## License
