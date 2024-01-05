@@ -292,6 +292,64 @@ fn skip_observable() {
     );
 }
 
+#[test]
+fn zip_observable() {
+    let emitted = Arc::new(Mutex::new(Vec::with_capacity(7)));
+    let emitted_cl = Arc::clone(&emitted);
+    let observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    let outer = generate_u32_observable(7, |_| {});
+
+    let inner = generate_u32_observable(6, |_| {});
+
+    let mut z = outer.zip(vec![inner]);
+    let s = z.subscribe(observer);
+    let _ = s.join();
+
+    assert_eq!(
+        <Vec<Vec<u32>> as AsRef<Vec<Vec<u32>>>>::as_ref(&emitted.lock().unwrap().as_ref()),
+        &[
+            &[0, 0],
+            &[1, 1],
+            &[2, 2],
+            &[3, 3],
+            &[4, 4],
+            &[5, 5],
+            &[6, 6]
+        ],
+        "zip operator failed to zip one observable"
+    );
+
+    let emitted = Arc::new(Mutex::new(Vec::with_capacity(7)));
+    let emitted_cl = Arc::clone(&emitted);
+    let observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    let outer = generate_u32_observable(7, |_| {}).map(|v| format!("s: {}", v));
+
+    let inner = generate_u32_observable(6, |_| {}).map(|v| format!("1st: {}", v));
+    let inner2 = generate_u32_observable(8, |_| {}).map(|v| format!("2nd: {}", v));
+    let inner3 = generate_u32_observable(4, |_| {}).map(|v| format!("3rd: {}", v));
+
+    let mut z = outer.zip(vec![inner, inner2, inner3]);
+    let s = z.subscribe(observer);
+    let _ = s.join();
+
+    assert_eq!(
+        <Vec<Vec<String>> as AsRef<Vec<Vec<String>>>>::as_ref(&emitted.lock().unwrap().as_ref()),
+        &[
+            &["s: 0", "1st: 0", "2nd: 0", "3rd: 0"],
+            &["s: 1", "1st: 1", "2nd: 1", "3rd: 1"],
+            &["s: 2", "1st: 2", "2nd: 2", "3rd: 2"],
+            &["s: 3", "1st: 3", "2nd: 3", "3rd: 3"],
+            &["s: 4", "1st: 4", "2nd: 4", "3rd: 4"]
+        ],
+        "zip operator failed to zip multiple observables"
+    );
+    emitted.lock().unwrap().clear();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn take_observable() {
     let take_bound = 7_u32;

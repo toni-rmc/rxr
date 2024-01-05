@@ -26,6 +26,15 @@ enum Receiver<T> {
     TokioReceiver(tokio::sync::mpsc::Receiver<T>),
 }
 
+enum EmittedValue<T> {
+    Success(T),
+    Complete,
+    Error(Arc<dyn std::error::Error + Send + Sync>),
+}
+
+type SubscribeFn<T> = Box<dyn FnMut(Subscriber<T>) -> Subscription + Send + Sync>;
+type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
+
 /// The `Observable` struct represents a source of values that can be observed
 /// and transformed.
 ///
@@ -407,10 +416,12 @@ enum Receiver<T> {
 ///
 /// observable.subscribe(observer);
 ///```
+#[derive(Clone)]
 pub struct Observable<T> {
-    subscribe_fn: Box<dyn FnMut(Subscriber<T>) -> Subscription + Send + Sync>,
+    subscribe_fn: Arc<Mutex<SubscribeFn<T>>>,
     fused: bool,
     defused: bool,
+    pub(crate) subject: bool,
 }
 
 impl<T> Observable<T> {
@@ -425,9 +436,10 @@ impl<T> Observable<T> {
     /// is asynchronous.
     pub fn new(sf: impl FnMut(Subscriber<T>) -> Subscription + Send + Sync + 'static) -> Self {
         Observable {
-            subscribe_fn: Box::new(sf),
+            subscribe_fn: Arc::new(Mutex::new(Box::new(sf))),
             fused: false,
             defused: false,
+            subject: false,
         }
     }
 
@@ -438,11 +450,12 @@ impl<T> Observable<T> {
     /// observable operations.
     pub fn empty() -> Self {
         Observable {
-            subscribe_fn: Box::new(|_| {
+            subscribe_fn: Arc::new(Mutex::new(Box::new(|_| {
                 Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
-            }),
+            }))),
             fused: false,
             defused: false,
+            subject: false,
         }
     }
 
@@ -506,6 +519,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnOnce(T) -> U) + Copy + Sync + Send + 'static,
         U: 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut observable = Observable::new(move |o| {
             let fused = o.fused;
@@ -532,6 +546,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -545,6 +560,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         Self: Sized + Send + Sync + 'static,
         P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut observable = Observable::new(move |o| {
             let fused = o.fused;
@@ -572,6 +588,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -584,6 +601,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut observable = Observable::new(move |o| {
             let fused = o.fused;
@@ -614,6 +632,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -627,6 +646,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut observable = Observable::new(move |o| {
             let fused = o.fused;
@@ -653,6 +673,198 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Zips the values emitted by multiple observables into a single observable.
+    ///
+    /// This method combines the values emitted by multiple observables into a single
+    /// observable, emitting a vector containing the latest value from each observable
+    /// in order when all observables have emitted a new value. This method is
+    /// non-blocking and combines the latest values emitted by observables without
+    /// waiting for completion. It completes as soon as the first observable in the
+    /// sequence completes and attempts to unsubscribe all zipped observables. If any
+    /// observable within the sequence encounters an error, it stops emissions, emits
+    /// that error, and tries to unsubscribe all observables in the sequence.
+    fn zip(mut self, observable_inputs: Vec<Observable<T>>) -> Observable<Vec<T>>
+    where
+        Self: Clone + Sized + Send + Sync + 'static,
+        T: Clone + Send,
+    {
+        use std::collections::HashMap;
+
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let mut observable_inputs: VecDeque<Observable<T>> = observable_inputs.to_vec().into();
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let input_len = observable_inputs.len();
+            let all_emits_collect = Arc::new(Mutex::new(HashMap::with_capacity(input_len)));
+
+            let subscriptions_store = Arc::new(Mutex::new(Vec::with_capacity(input_len)));
+            let subscriptions_store_cl = Arc::clone(&subscriptions_store);
+            let subscriptions_store_cl2 = Arc::clone(&subscriptions_store);
+            let subscriptions_store_cl3 = Arc::clone(&subscriptions_store);
+            let tokio_handle = tokio::runtime::Handle::try_current();
+
+            let mut idx = 0;
+            while let Some(mut input) = observable_inputs.pop_front() {
+                let inner_emits_collect = VecDeque::with_capacity(16);
+                all_emits_collect
+                    .lock()
+                    .unwrap()
+                    .insert(idx, inner_emits_collect);
+
+                let all_emits_collect_cl = Arc::clone(&all_emits_collect);
+                let all_emits_collect_cl2 = Arc::clone(&all_emits_collect);
+                let all_emits_collect_cl3 = Arc::clone(&all_emits_collect);
+
+                let inner_subscriber = Subscriber::new(
+                    move |v: T| {
+                        let all_emits_collect_cl = Arc::clone(&all_emits_collect_cl);
+                        if let Some(inner_emits) =
+                            all_emits_collect_cl.lock().unwrap().get_mut(&idx)
+                        {
+                            inner_emits.push_back(EmittedValue::Success(v));
+                        };
+                    },
+                    move |e| {
+                        if let Some(inner_emits) =
+                            all_emits_collect_cl2.lock().unwrap().get_mut(&idx)
+                        {
+                            inner_emits.push_back(EmittedValue::Error(e));
+                        }
+                    },
+                    move || {
+                        if let Some(inner_emits) =
+                            all_emits_collect_cl3.lock().unwrap().get_mut(&idx)
+                        {
+                            inner_emits.push_back(EmittedValue::Complete);
+                        }
+                    },
+                );
+                let subscriptions_store = Arc::clone(&subscriptions_store);
+                let subscription = input.subscribe(inner_subscriber);
+                subscriptions_store.lock().unwrap().push(subscription);
+                idx += 1;
+            }
+
+            let is_subject = self.is_subject();
+            fn unsubscribe_stored_subscriptions(
+                subscriptions_store: Arc<Mutex<Vec<Subscription>>>,
+                is_subject: bool,
+            ) {
+                // To avoid dead-lock, we skip calling `unsubscribe()` if source
+                // observable is one of the Subject variants.
+                if is_subject {
+                    if let Ok(mut s) = subscriptions_store.lock() {
+                        s.pop();
+                    }
+                }
+                if let Ok(mut s) = subscriptions_store.lock() {
+                    while let Some(u) = s.pop() {
+                        u.unsubscribe();
+                    }
+                }
+            }
+            use std::task::Poll;
+            let mut unsubscribed = false;
+            let mut u = Subscriber::new(
+                move |v| {
+                    if unsubscribed {
+                        return;
+                    }
+                    let mut values = Vec::with_capacity(input_len);
+                    values.push(v);
+                    let mut unsub = false;
+                    let mut i = 0;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(1));
+                        if let Some(s) = all_emits_collect.lock().unwrap().get_mut(&i) {
+                            match s.pop_front() {
+                                Some(EmittedValue::Success(e)) => {
+                                    values.push(e);
+                                    i += 1;
+                                }
+                                Some(EmittedValue::Complete) => {
+                                    unsub = true;
+                                    break;
+                                }
+                                Some(EmittedValue::Error(e)) => {
+                                    unsub = true;
+                                    o_shared.lock().unwrap().error(e);
+                                    break;
+                                }
+                                None => (),
+                            }
+                        }
+                        if i == input_len {
+                            break;
+                        }
+                        if tokio::runtime::Handle::try_current().is_ok() {
+                            let ftr = std::future::poll_fn(|cx| {
+                                cx.waker().clone().wake();
+                                Poll::Ready::<()>(())
+                            });
+                            tokio::task::spawn(async {
+                                ftr.await;
+                            });
+                        }
+                    }
+                    if unsub {
+                        unsubscribe_stored_subscriptions(
+                            subscriptions_store_cl.clone(),
+                            is_subject,
+                        );
+                        unsubscribed = true;
+                        return;
+                    }
+                    o_shared.lock().unwrap().next(values);
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                    unsubscribe_stored_subscriptions(subscriptions_store_cl2.clone(), is_subject);
+                },
+                move || {
+                    // If outer observable completes first notify all inner
+                    // observables to complete.
+                    o_cloned_c.lock().unwrap().complete();
+                    unsubscribe_stored_subscriptions(subscriptions_store_cl3.clone(), is_subject);
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+
+            let mut outer_subscription = self.subscribe(u);
+            let handle = outer_subscription.subscription_future;
+            outer_subscription.subscription_future = SubscriptionHandle::Nil;
+            subscriptions_store.lock().unwrap().push(outer_subscription);
+
+            if tokio_handle.is_ok() {
+                return Subscription::new(
+                    UnsubscribeLogic::Future(Box::pin(async move {
+                        unsubscribe_stored_subscriptions(subscriptions_store, false);
+                    })),
+                    handle,
+                );
+            }
+            Subscription::new(
+                UnsubscribeLogic::Logic(Box::new(move || {
+                    unsubscribe_stored_subscriptions(subscriptions_store, false);
+                })),
+                handle,
+            )
+        });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -676,6 +888,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     where
         Self: Sized + Send + Sync + 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut i = 0;
 
@@ -824,6 +1037,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 ijh,
             )
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -855,6 +1069,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         Self: Sized + Send + Sync + 'static,
     {
         let notifier = Arc::new(Mutex::new(notifier));
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1033,6 +1248,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 ijh,
             )
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1051,8 +1267,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn take_while<P>(mut self, predicate: P) -> Observable<T>
     where
         Self: Sized + Send + Sync + 'static,
-        P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
+        P: FnOnce(&T) -> bool + Copy + Sync + Send + 'static,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1199,6 +1416,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 ijh,
             )
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1222,6 +1440,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         Self: Sized + Send + Sync + 'static,
         T: Send,
     {
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1270,6 +1489,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1305,6 +1525,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             s
         }
 
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1336,7 +1557,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 subscriptions.push(subscription);
             }
 
-            // If Tokio is used with `current_thread` runtime flavor returned
+            // If Tokio is used with `current_thread` runtime flavor, returned
             // Subscriber will be `UnsubscribeLogic::Logic` so that `take()` can
             // unsubscribe background emissions in all cases.
             if let Ok(handle) = s.runtime_handle.as_ref() {
@@ -1376,6 +1597,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 SubscriptionHandle::JoinSubscriptions(SubscriptionCollection::new(sc, false)),
             )
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1411,6 +1633,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             s
         }
 
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1476,6 +1699,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 SubscriptionHandle::JoinSubscriptions(SubscriptionCollection::new(sc, false)),
             )
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1499,6 +1723,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1554,6 +1779,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1581,6 +1807,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1628,6 +1855,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1656,6 +1884,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1669,7 +1898,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
             let project = Arc::clone(&project);
 
-            let pending_observables: Arc<Mutex<VecDeque<(Observable<R>, Subscriber<R>)>>> =
+            let pending_observables: Arc<Mutex<PendingObservables<R>>> =
                 Arc::new(Mutex::new(VecDeque::new()));
 
             let mut first_pass = true;
@@ -1719,6 +1948,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1743,6 +1973,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
+        let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
 
         let mut observable = Observable::new(move |o| {
@@ -1822,6 +2053,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             self.set_fused(fused, defused);
             self.subscribe(u)
         });
+        observable.set_subject_indicator(subject);
         observable.set_fused(fused, defused);
         observable
     }
@@ -1850,11 +2082,15 @@ impl<T: 'static> Subscribeable for Observable<T> {
         } else {
             v.set_fused(self.fused, self.defused);
         }
-        (self.subscribe_fn)(v)
+        (self.subscribe_fn.lock().unwrap())(v)
     }
 
     fn is_subject(&self) -> bool {
-        false
+        self.subject
+    }
+
+    fn set_subject_indicator(&mut self, s: bool) {
+        self.subject = s;
     }
 }
 

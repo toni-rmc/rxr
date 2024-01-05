@@ -333,7 +333,10 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectReceiver<T
             // If ReplaySubject is unsubscribed `closed` flag is set. When closed
             // ReplaySubject does not emit nor subscribes.
             if src.closed {
-                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+                return Subscription::subject_subscription(
+                    UnsubscribeLogic::Nil,
+                    SubscriptionHandle::Nil,
+                );
             }
             // if src.fused {
             //     v.set_fused(true);
@@ -360,17 +363,23 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for ReplaySubjectReceiver<T
                     // every subsequent Subscriber.
                     v.complete();
                 }
-                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+                return Subscription::subject_subscription(
+                    UnsubscribeLogic::Nil,
+                    SubscriptionHandle::Nil,
+                );
             }
             // If ReplaySubject is not completed register new Subscriber.
             src.observers.push((key, v));
         } else {
-            return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+            return Subscription::subject_subscription(
+                UnsubscribeLogic::Nil,
+                SubscriptionHandle::Nil,
+            );
         };
 
         let source_cloned = Arc::clone(&self.0);
 
-        Subscription::new(
+        Subscription::subject_subscription(
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned
                     .lock()

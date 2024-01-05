@@ -240,7 +240,10 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviorSubjectReceiver
 
         if let Ok(mut src) = self.0.lock() {
             if src.closed {
-                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+                return Subscription::subject_subscription(
+                    UnsubscribeLogic::Nil,
+                    SubscriptionHandle::Nil,
+                );
             }
             // if src.fused {
             //     v.set_fused(true);
@@ -256,19 +259,25 @@ impl<T: Clone + Send + Sync + 'static> Subscribeable for BehaviorSubjectReceiver
                     // every subsequent Subscriber.
                     v.complete();
                 }
-                return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+                return Subscription::subject_subscription(
+                    UnsubscribeLogic::Nil,
+                    SubscriptionHandle::Nil,
+                );
             }
             // Subscriber emits stored value right away when being registered unless
             // BehaviorSubject invoked complete(), error() or unsubscribe().
             v.next(src.value.clone());
             src.observers.push((key, v));
         } else {
-            return Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil);
+            return Subscription::subject_subscription(
+                UnsubscribeLogic::Nil,
+                SubscriptionHandle::Nil,
+            );
         };
 
         let source_cloned = Arc::clone(&self.0);
 
-        Subscription::new(
+        Subscription::subject_subscription(
             UnsubscribeLogic::Logic(Box::new(move || {
                 source_cloned
                     .lock()

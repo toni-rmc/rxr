@@ -53,6 +53,9 @@ pub trait Subscribeable: Fuse {
     fn is_subject(&self) -> bool {
         true
     }
+
+    #[doc(hidden)]
+    fn set_subject_indicator(&mut self, _: bool) {}
 }
 
 /// A trait for types that can be unsubscribed, allowing the clean release of resources
@@ -74,15 +77,19 @@ pub trait Unsubscribeable {
     fn unsubscribe(self);
 }
 
+type NextFn<T> = Box<dyn FnMut(T) + Send>;
+type CompleteFn = Box<dyn FnMut() + Send + Sync>;
+type ErrorFn = Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>;
+
 /// A type that acts as an observer, allowing users to handle emitted values, errors,
 /// and completion when subscribing to an `Observable` or `Subject`.
 ///
 /// Users can create a `Subscriber` instance using the `new` method and provide
 /// custom functions to handle the `next`, `error`, and `complete` events.
 pub struct Subscriber<NextFnType> {
-    next_fn: Box<dyn FnMut(NextFnType) + Send>,
-    complete_fn: Option<Box<dyn FnMut() + Send + Sync>>,
-    error_fn: Option<Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>>,
+    next_fn: NextFn<NextFnType>,
+    complete_fn: Option<CompleteFn>,
+    error_fn: Option<ErrorFn>,
     completed: bool,
     pub(crate) fused: bool,
     pub(crate) defused: bool,
@@ -170,7 +177,7 @@ impl<NextFnType> Subscriber<NextFnType> {
     // }
 }
 
-impl<T> crate::subscription::subscribe::Fuse for Subscriber<T> {
+impl<T> Fuse for Subscriber<T> {
     fn set_fused(&mut self, fused: bool, defused: bool) {
         // if fused {
         //     self.fused = true;
@@ -233,7 +240,7 @@ type AwaitResult<T> = Result<T, Box<dyn Any + Send>>;
 pub struct SubscriptionCollection {
     subscriptions: Arc<Mutex<Option<Vec<Subscription>>>>,
     signal_sent: Arc<Mutex<bool>>,
-    use_task: bool,
+    pub(crate) use_task: bool,
 }
 
 impl SubscriptionCollection {
@@ -331,6 +338,8 @@ impl SubscriptionCollection {
         *local_signal.write().unwrap() = true;
         Ok(())
     }
+
+    #[allow(clippy::await_holding_lock)]
 
     pub(crate) fn join_all_async(self) -> Pin<Box<dyn Future<Output = AwaitResult<()>> + 'static>> {
         Box::pin(async move {
@@ -536,6 +545,7 @@ pub struct Subscription {
     pub(crate) unsubscribe_logic: UnsubscribeLogic,
     pub(crate) subscription_future: SubscriptionHandle,
     pub(crate) runtime_handle: Result<runtime::Handle, runtime::TryCurrentError>,
+    _is_subject: bool,
 }
 
 impl Subscription {
@@ -561,7 +571,25 @@ impl Subscription {
             unsubscribe_logic,
             subscription_future,
             runtime_handle,
+            _is_subject: false,
         }
+    }
+
+    pub(crate) fn subject_subscription(
+        unsubscribe_logic: UnsubscribeLogic,
+        subscription_future: SubscriptionHandle,
+    ) -> Self {
+        let runtime_handle = tokio::runtime::Handle::try_current();
+        Subscription {
+            unsubscribe_logic,
+            subscription_future,
+            runtime_handle,
+            _is_subject: true,
+        }
+    }
+
+    pub(crate) fn _is_subject(&self) -> bool {
+        self._is_subject
     }
 
     /// Awaits the completion of the asynchronous task or thread associated with
