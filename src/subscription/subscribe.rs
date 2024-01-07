@@ -164,6 +164,7 @@ impl<NextFnType> Subscriber<NextFnType> {
     ///     // ...
     /// });
     /// ```
+    #[must_use]
     pub fn is_fused(&self) -> bool {
         self.fused && !self.defused
     }
@@ -253,6 +254,8 @@ impl SubscriptionCollection {
     }
 
     pub(crate) fn join_all(self) -> AwaitResult<()> {
+        use std::thread::{sleep, spawn};
+
         let mut subscriptionsh = self.subscriptions.lock().unwrap();
 
         let subscriptions = subscriptionsh.take();
@@ -284,8 +287,6 @@ impl SubscriptionCollection {
 
         let mut stored = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
         let mut stored_tasks = Vec::with_capacity(subscriptions.as_ref().unwrap().len());
-
-        use std::thread::{sleep, spawn};
 
         for mut s in subscriptions.unwrap() {
             if *self.signal_sent.lock().unwrap() {
@@ -562,6 +563,7 @@ impl Subscription {
     ///
     /// [`UnsubscribeLogic`]: enum.UnsubscribeLogic.html
     /// [`SubscriptionHandle`]: enum.SubscriptionHandle.html
+    #[must_use]
     pub fn new(
         unsubscribe_logic: UnsubscribeLogic,
         subscription_future: SubscriptionHandle,

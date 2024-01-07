@@ -31,7 +31,7 @@ use crate::{
 ///
 /// # Examples
 ///
-/// Subject completion
+/// `Subject` completion
 ///
 ///```no_run
 /// use rxr::{subjects::Subject, subscribe::Subscriber};
@@ -78,7 +78,7 @@ use crate::{
 /// emitter.next(104); // Called post-completion, does not emit.
 ///```
 ///
-/// Utilizing a Subject as an Observer. This can be done with any variant of Subject.
+/// Utilizing a `Subject` as an `Observer`. This can be done with any variant of `Subject`.
 ///
 ///```no_run
 /// use std::{fmt::Display, time::Duration};
@@ -142,6 +142,7 @@ pub struct Subject<T> {
 impl<T: 'static> Subject<T> {
     /// Creates a new pair of `SubjectEmitter` for emitting values and
     /// `SubjectReceiver` for subscribing to values.
+    #[must_use]
     pub fn emitter_receiver() -> (SubjectEmitter<T>, SubjectReceiver<T>) {
         let s = Arc::new(Mutex::new(Subject {
             observers: Vec::with_capacity(16),
@@ -177,11 +178,13 @@ pub struct SubjectEmitter<T>(Arc<Mutex<Subject<T>>>);
 
 impl<T> SubjectReceiver<T> {
     /// Returns the number of registered observers.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
     /// Returns `true` if no observers are registered, `false` otherwise.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

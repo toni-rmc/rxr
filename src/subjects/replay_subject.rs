@@ -69,7 +69,7 @@ pub enum BufSize {
 ///
 /// # Examples
 ///
-/// ReplaySubject completion
+/// `ReplaySubject` completion
 ///
 ///```no_run
 /// use rxr::{
@@ -121,7 +121,7 @@ pub enum BufSize {
 /// emitter.next(104); // Called post-completion, does not emit.
 ///```
 ///
-/// ReplaySubject error
+/// `ReplaySubject` error
 ///
 ///```no_run
 /// use std::{error::Error, fmt::Display, sync::Arc};
@@ -213,6 +213,7 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
     ///
     /// Returns a tuple containing a `ReplaySubjectEmitter` for emitting values and
     /// a `ReplaySubjectReceiver` for subscribing to emitted values.
+    #[must_use]
     pub fn emitter_receiver(
         buf_size: BufSize,
     ) -> (ReplaySubjectEmitter<T>, ReplaySubjectReceiver<T>) {
@@ -250,6 +251,7 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
     ///
     /// Returns a tuple containing a `ReplaySubjectEmitter` for emitting values and
     /// a `ReplaySubjectReceiver` for subscribing to emitted values.
+    #[must_use]
     pub fn emitter_receiver_time_aware(
         buf_size: BufSize,
         window_size_ms: u128,
@@ -297,11 +299,13 @@ pub struct ReplaySubjectEmitter<T>(Arc<Mutex<ReplaySubject<T>>>);
 
 impl<T> ReplaySubjectReceiver<T> {
     /// Returns the number of registered observers.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
     /// Returns `true` if no observers are registered, `false` otherwise.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

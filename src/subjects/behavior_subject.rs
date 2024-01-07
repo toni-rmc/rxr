@@ -33,7 +33,7 @@ use crate::{
 ///
 /// # Examples
 ///
-/// BehaviorSubject completion
+/// `BehaviorSubject` completion
 ///
 ///```no_run
 /// use rxr::{subjects::BehaviorSubject, subscribe::Subscriber};
@@ -81,7 +81,7 @@ use crate::{
 /// emitter.next(104); // Called post-completion, does not emit.
 ///```
 ///
-/// BehaviorSubject error
+/// `BehaviorSubject` error
 ///
 ///```no_run
 /// use std::error::Error;
@@ -170,6 +170,7 @@ impl<T: Send + Sync + 'static> BehaviorSubject<T> {
     ///
     /// // Now you can use `emitter` to emit values and `receiver` to subscribe to them.
     /// ```
+    #[must_use]
     pub fn emitter_receiver(value: T) -> (BehaviorSubjectEmitter<T>, BehaviorSubjectReceiver<T>) {
         let s = Arc::new(Mutex::new(BehaviorSubject {
             value,
@@ -206,11 +207,13 @@ pub struct BehaviorSubjectEmitter<T>(Arc<Mutex<BehaviorSubject<T>>>);
 
 impl<T> BehaviorSubjectReceiver<T> {
     /// Returns the number of registered observers.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
     /// Returns `true` if no observers are registered, `false` otherwise.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

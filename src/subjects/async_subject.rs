@@ -33,7 +33,7 @@ use crate::{
 ///
 /// # Examples
 ///
-/// AsyncSubject completion
+/// `AsyncSubject` completion
 ///
 ///```no_run
 /// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
@@ -82,7 +82,7 @@ use crate::{
 /// emitter.next(104); // Called post-completion, does not emit.
 ///```
 ///
-/// AsyncSubject error
+/// `AsyncSubject` error
 ///
 ///```no_run
 /// use std::error::Error;
@@ -160,6 +160,7 @@ impl<T: Send + Sync + 'static> AsyncSubject<T> {
     /// Initializes an `AsyncSubject` and returns a tuple containing an
     /// `AsyncSubjectEmitter` for emitting values and an `AsyncSubjectReceiver`
     /// for subscribing to emitted values.
+    #[must_use]
     pub fn emitter_receiver() -> (AsyncSubjectEmitter<T>, AsyncSubjectReceiver<T>) {
         let s = Arc::new(Mutex::new(AsyncSubject {
             value: None,
@@ -196,11 +197,13 @@ pub struct AsyncSubjectEmitter<T>(Arc<Mutex<AsyncSubject<T>>>);
 
 impl<T> AsyncSubjectReceiver<T> {
     /// Returns the number of registered observers.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.lock().unwrap().observers.len()
     }
 
     /// Returns `true` if no observers are registered, `false` otherwise.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

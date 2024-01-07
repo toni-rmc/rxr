@@ -448,6 +448,7 @@ impl<T> Observable<T> {
     /// The resulting observable does not emit any values and immediately completes
     /// upon subscription. It serves as a placeholder or a base case for some
     /// observable operations.
+    #[must_use]
     pub fn empty() -> Self {
         Observable {
             subscribe_fn: Arc::new(Mutex::new(Box::new(|_| {
@@ -475,6 +476,7 @@ impl<T> Observable<T> {
     /// `fuse()` does not unsubscribe ongoing emissions from the observable;
     /// it simply ignores them after the first `complete()` call, ensuring that no
     /// more values are emitted.
+    #[must_use]
     pub fn fuse(mut self) -> Self {
         self.fused = true;
         self.defused = false;
@@ -495,6 +497,7 @@ impl<T> Observable<T> {
     /// Defusing an observable does not allow it to emit an error after the first
     /// error emission. Once an error is emitted, the observable is considered closed
     /// and will not emit any further values, regardless of being defused or not.
+    #[must_use]
     pub fn defuse(mut self) -> Self {
         self.fused = false;
         self.defused = true;
@@ -698,7 +701,27 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
         let mut observable = Observable::new(move |o| {
-            let mut observable_inputs: VecDeque<Observable<T>> = observable_inputs.to_vec().into();
+            use std::task::Poll;
+            fn unsubscribe_stored_subscriptions(
+                subscriptions_store: Arc<Mutex<Vec<Subscription>>>,
+                is_subject: bool,
+            ) {
+                // To avoid dead-lock, we skip calling `unsubscribe()` if source
+                // observable is one of the Subject variants.
+                if is_subject {
+                    if let Ok(mut s) = subscriptions_store.lock() {
+                        s.pop();
+                    }
+                }
+                if let Ok(mut s) = subscriptions_store.lock() {
+                    while let Some(u) = s.pop() {
+                        u.unsubscribe();
+                    }
+                }
+            }
+
+            let is_subject = self.is_subject();
+            let mut observable_inputs: VecDeque<Observable<T>> = observable_inputs.clone().into();
             let fused = o.fused;
             let defused = o.defused;
             let take_wrapped = o.take_wrapped;
@@ -758,25 +781,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 idx += 1;
             }
 
-            let is_subject = self.is_subject();
-            fn unsubscribe_stored_subscriptions(
-                subscriptions_store: Arc<Mutex<Vec<Subscription>>>,
-                is_subject: bool,
-            ) {
-                // To avoid dead-lock, we skip calling `unsubscribe()` if source
-                // observable is one of the Subject variants.
-                if is_subject {
-                    if let Ok(mut s) = subscriptions_store.lock() {
-                        s.pop();
-                    }
-                }
-                if let Ok(mut s) = subscriptions_store.lock() {
-                    while let Some(u) = s.pop() {
-                        u.unsubscribe();
-                    }
-                }
-            }
-            use std::task::Poll;
             let mut unsubscribed = false;
             let mut u = Subscriber::new(
                 move |v| {
@@ -1494,6 +1498,80 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         observable
     }
 
+    /// The `tap` operator allows you to intercept the items emitted by an observable
+    /// and perform side effects on those items without modifying the emitted data or
+    /// the stream itself.
+    ///
+    /// This operator is used primarily for side effects. It allows you to perform
+    /// actions or operations on the items emitted by an observable without affecting
+    /// the stream itself. The `tap` operator is best used for debugging, logging, or
+    /// performing actions that don't change the emitted values but are necessary for
+    /// monitoring or debugging purposes such as console logging, data inspection,
+    /// or triggering some external action based on the emitted values.
+    ///
+    /// ```text
+    /// let log_observer = Subscriber::new(
+    ///     |v| println!("Filtered {}", v),
+    ///     |e| println!("Filtered error {}", e),
+    ///     || println!("Filtered complete")
+    /// );
+    ///
+    /// observable
+    ///     .tap(Subscriber::on_next(|v| println!("Before filtering: {}", v)))
+    ///     .filter(|v| v % 2 == 0)
+    ///     .tap(log_observer)
+    ///     .subscribe(observer);
+    /// ```
+    fn tap(mut self, observer: Subscriber<T>) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+        T: Clone,
+    {
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+        let observer = Arc::new(Mutex::new(observer));
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let observer = Arc::clone(&observer);
+            let observer_cl = Arc::clone(&observer);
+            let observer_e = Arc::clone(&observer);
+
+            let mut u = Subscriber::new(
+                move |v: T| {
+                    if let Ok(mut s) = observer.lock() {
+                        s.next(v.clone());
+                    }
+                    o_shared.lock().unwrap().next(v);
+                },
+                move |observable_error| {
+                    if let Ok(mut s) = observer_e.lock() {
+                        s.error(observable_error.clone());
+                    }
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    if let Ok(mut s) = observer_cl.lock() {
+                        s.complete();
+                    }
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
     /// Merges the current observable with a vector of observables, emitting items
     /// from all of them concurrently.
     fn merge(mut self, mut sources: Vec<Observable<T>>) -> Observable<T>
@@ -1655,8 +1733,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let s2 = source.subscribe(wrapped2);
 
             match (&s1.unsubscribe_logic, &s2.unsubscribe_logic) {
-                (UnsubscribeLogic::Future(_), _) => use_tokio_task = true,
-                (_, UnsubscribeLogic::Future(_)) => use_tokio_task = true,
+                (UnsubscribeLogic::Future(_), _) | (_, UnsubscribeLogic::Future(_)) => {
+                    use_tokio_task = true;
+                }
                 _ => (),
             }
 
