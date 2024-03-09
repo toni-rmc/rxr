@@ -1,6 +1,8 @@
 //! This `Observable` emits values and completes, returning a `Subscription` that can be
 //! unsubscribed from, enabling all operators to function correctly. It utilizes an OS
 //! thread for asynchronous processing, preventing it from blocking the current thread.
+//!
+//! To run this example, execute `cargo run --example unsubscribe_observable`.
 
 use std::{
     sync::{Arc, Mutex},

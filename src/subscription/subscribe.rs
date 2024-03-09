@@ -600,6 +600,11 @@ impl Subscription {
     /// If the observable uses asynchronous `Tokio` tasks, this method will await the
     /// completion of the task. If the observable uses OS threads, it will await the
     /// completion of the thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if joining a thread or awaiting a task used by the
+    /// observable fails.
     pub async fn join_concurrent(self) -> Result<(), Box<dyn Any + Send>> {
         match self.subscription_future {
             SubscriptionHandle::JoinTask(task_handle) => {
@@ -620,6 +625,10 @@ impl Subscription {
     ///
     /// This method is useful when using `rxr` without `Tokio` in a project, as it
     /// allows for awaiting completion without relying on asynchronous constructs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if joining a thread used by the observable fails.
     ///
     /// # Panics
     ///
@@ -694,9 +703,11 @@ impl UnsubscribeLogic {
                             future.await;
                         });
                     }
-                    Err(_) => panic!(
-                        "Observable that uses Tokio tasks is called outside of Tokio runtime"
-                    ),
+                    e @ Err(_) => {
+                        e.expect(
+                            "Observable that uses Tokio tasks is called outside of Tokio runtime",
+                        );
+                    }
                 }
                 self = Self::Nil;
             }

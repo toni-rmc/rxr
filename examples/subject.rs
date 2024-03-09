@@ -1,3 +1,12 @@
+//! `Subject` example
+//!
+//! This example demonstrates the usage of the `Subject` in the `rxr` library.
+//!
+//! The `Subject` acts as both an observer and observable in reactive programming,
+//! broadcasting values to multiple observers.
+//!
+//! To run this example, execute `cargo run --example subject`.
+
 use rxr::{subjects::Subject, subscribe::Subscriber};
 use rxr::{ObservableExt, Observer, Subscribeable};
 

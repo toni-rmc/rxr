@@ -5,6 +5,8 @@
 //!
 //! This asynchronous Observable utilizes an OS thread, preventing it from blocking
 //! the current thread.
+//!
+//! To run this example, execute `cargo run --example async_observable_os_threads`.
 
 use std::time::Duration;
 

@@ -3,6 +3,8 @@
 //!
 //! Ensure errors are wrapped in an `Arc` before passing them to the Observer's
 //! `error` function.
+//!
+//! To run this example, execute `cargo run --example handle_error_observable`.
 
 use std::{error::Error, fmt::Display, io, sync::Arc};
 

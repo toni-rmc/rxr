@@ -293,6 +293,49 @@ fn skip_observable() {
 }
 
 #[test]
+fn scan_observable() {
+    let emitted = Arc::new(Mutex::new(Vec::with_capacity(8)));
+    let emitted_cl = Arc::clone(&emitted);
+    let observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    let observable = generate_u32_observable(7, |_| {});
+
+    let mut o = observable.scan(|total: u32, v: u32| total + v, None);
+    let s = o.subscribe(observer);
+    let _ = s.join();
+
+    let emitted = emitted.lock().unwrap();
+    let emitted: &[u32] = emitted.as_ref();
+
+    assert_eq!(
+        emitted,
+        &[0, 1, 3, 6, 10, 15, 21, 28],
+        "scan operator without initial seed value failed to correctly accumulate emitted values"
+    );
+
+    let emitted = Arc::new(Mutex::new(Vec::with_capacity(8)));
+    let emitted_cl = Arc::clone(&emitted);
+    let observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    let observable = generate_u32_observable(7, |_| {});
+
+    let mut o = observable.scan(|total: u32, v: u32| total + v, Some(20));
+    let s = o.subscribe(observer);
+    let _ = s.join();
+
+    let emitted = emitted.lock().unwrap();
+    let emitted: &[u32] = emitted.as_ref();
+
+    assert_eq!(
+        emitted,
+        &[20, 21, 23, 26, 30, 35, 41, 48],
+        "scan operator with initial seed value failed to correctly accumulate emitted values"
+    );
+}
+
+#[test]
 fn zip_observable() {
     let emitted = Arc::new(Mutex::new(Vec::with_capacity(7)));
     let emitted_cl = Arc::clone(&emitted);

@@ -1,3 +1,18 @@
+//! `ReplaySubject` example
+//!
+//! This example demonstrates the usage of the `ReplaySubject` in the `rxr` library.
+//!
+//! The `ReplaySubject` is a type of subject in reactive programming that replays a
+//! specified number of previously emitted items to new subscribers. It keeps a
+//! buffer of past emissions and immediately provides these buffered items to any new
+//! subscriber upon subscription. The number of items replayed is determined by the
+//! specified buffer size.
+//!
+//! If no buffer size is specified, the `ReplaySubject` will replay all previously
+//! emitted items to new subscribers.
+//!
+//! To run this example, execute `cargo run --example replay_subject`.
+
 use rxr::{
     subjects::{BufSize, ReplaySubject},
     subscribe::Subscriber,

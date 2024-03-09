@@ -1,4 +1,6 @@
-//! Demonstrates how to use Subject emitter as an observer.
+//! Demonstrates how to use `Subject` emitter as an observer.
+//!
+//! To run this example, execute `cargo run --example subject_as_observer`.
 
 use std::{fmt::Display, time::Duration};
 

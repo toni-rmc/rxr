@@ -1,6 +1,8 @@
 //! This `Observable` emits values and completes, returning a `Subscription` that can
 //! be unsubscribed from, enabling all operators to function correctly. It uses `Tokio`
 //! tasks for asynchronous processing, preventing it from blocking the current thread.
+//!
+//! To run this example, execute `cargo run --example async_observable_tokio`.
 
 use std::sync::{Arc, Mutex};
 

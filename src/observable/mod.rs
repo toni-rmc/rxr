@@ -519,7 +519,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn map<U, F>(mut self, f: F) -> Observable<U>
     where
         Self: Sized + Send + Sync + 'static,
-        F: (FnOnce(T) -> U) + Copy + Sync + Send + 'static,
+        F: FnOnce(T) -> U + Copy + Sync + Send + 'static,
         U: 'static,
     {
         let subject = self.is_subject();
@@ -680,6 +680,91 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         observable.set_fused(fused, defused);
         observable
     }
+
+    /// Accumulates values emitted by an observable over time, producing an accumulated
+    /// result based on an accumulator function applied to each emitted value.
+    ///
+    /// The `scan` operator applies an accumulator function over the values emitted by
+    /// the source observable. It accumulates values into a single accumulated result,
+    /// and each new value emitted by the source observable contributes to this
+    /// accumulation. The accumulated result is emitted by the resulting observable.
+    /// `seed` is optional. If omitted, the first emitted value is used as the `seed`.
+    fn scan<U, F>(mut self, acc: F, seed: Option<U>) -> Observable<U>
+    where
+        Self: Sized + Send + Sync + 'static,
+        F: FnOnce(U, T) -> U + Copy + Sync + Send + 'static,
+        U: From<T> + Clone + Send + Sync + 'static,
+    {
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+        // let acc = Arc::new(Mutex::new(acc));
+
+        let mut observable = Observable::new(move |o| {
+            let state = Arc::new(Mutex::new(seed.clone()));
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+            let state_cl = Arc::clone(&state);
+            // let acc_cl = Arc::clone(&acc);
+
+            let mut u = Subscriber::new(
+                move |v: T| {
+                    if let Ok(mut state) = state_cl.lock() {
+                        if state.is_none() {
+                            *state = Some(v).map(std::convert::Into::into);
+                        } else {
+                            *state = state.as_ref().map(|s| acc(s.clone(), v));
+                        }
+                        o_shared
+                            .lock()
+                            .unwrap()
+                            .next(state.as_ref().unwrap().clone());
+                    }
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    // fn scan_a<F>(mut self, acc: F, seed: Option<T>) -> ScanObservable<T>
+    // where
+    //     Self: Sized + Send + Sync + 'static,
+    //     F: FnMut(T, T) -> T + Sync + Send + 'static,
+    //     T: Clone + Send,
+    // {
+    //     let subject = self.is_subject();
+    //     let (fused, defused) = self.get_fused();
+
+    //     let mut observable = ScanObservable::new(
+    //         move |o| {
+    //             let fused = o.fused;
+    //             let defused = o.defused;
+
+    //             self.set_fused(fused, defused);
+    //             self.subscribe(o)
+    //         },
+    //         acc,
+    //         seed,
+    //     );
+    //     observable.set_subject_indicator(subject);
+    //     observable.set_fused(fused, defused);
+    //     observable
+    // }
 
     /// Zips the values emitted by multiple observables into a single observable.
     ///

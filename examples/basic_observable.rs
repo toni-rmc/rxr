@@ -4,7 +4,9 @@
 //! unsubscribe functionality to work correctly.
 //!
 //! Additionally, this is a synchronous Observable, so it blocks the current thread
-//! until it completes emission.
+//! until it completes emissions.
+//!
+//! To run this example, execute `cargo run --example basic_observable`.
 
 use rxr::subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic};
 use rxr::{Observable, Observer, Subscribeable};

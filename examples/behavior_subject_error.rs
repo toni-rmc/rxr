@@ -1,3 +1,16 @@
+//! `BehaviorSubject` example with error handling
+//!
+//! This example showcases the functionality of the `BehaviorSubject` emitting error
+//! in the `rxr` library.
+//!
+//! The `BehaviorSubject` is a type of subject in reactive programming that emits the
+//! most recently emitted item and all subsequent items of the source observable to
+//! its subscribers. It holds a current value, and new subscribers receive the last
+//! emitted value immediately upon subscription. If no items have been emitted yet,
+//! subscribers will receive a default or specified initial value.
+//!
+//! To run this example, execute `cargo run --example behavior_subject_error`.
+
 use std::error::Error;
 use std::fmt::Display;
 use std::sync::Arc;

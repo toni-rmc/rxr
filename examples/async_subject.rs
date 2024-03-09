@@ -1,3 +1,14 @@
+//! `AsyncSubject` example
+//!
+//! This example demonstrates the usage of the `AsyncSubject` in the `rxr` library.
+//!
+//! The `AsyncSubject` is a type of subject in reactive programming that emits only
+//! the last value emitted by the source observable, only after that observable
+//! completes. If the source observable terminates with an error, the `AsyncSubject`
+//! will propagate that error.
+//!
+//! To run this example, execute `cargo run --example async_subject`.
+
 use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
 use rxr::{ObservableExt, Observer, Subscribeable};
 
