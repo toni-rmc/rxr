@@ -1,6 +1,7 @@
 mod generate_observable;
 
 use generate_observable::{generate_u32_observable, generate_u32_observable_async};
+
 use std::{
     panic::{catch_unwind, resume_unwind},
     sync::{Arc, Mutex},
@@ -9,10 +10,8 @@ use std::{
 
 use rxr::{
     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
-    Observable, Observer,
+    Observable, ObservableExt, Observer, Subscribeable,
 };
-
-use rxr::{ObservableExt, Subscribeable};
 
 struct CheckFinished {
     last_value: i32,

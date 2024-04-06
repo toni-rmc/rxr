@@ -6,4 +6,5 @@
 //!
 //! Additionally, it defines enums and traits for subscription handling, awaiting
 //! asynchronous subscriptions and defining unsubscribe logic.
+
 pub mod subscribe;

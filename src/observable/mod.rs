@@ -2,6 +2,8 @@
 //! The `observable` module provides the building blocks for creating and manipulating
 //! observables, allowing for reactive programming in Rust.
 
+pub mod multicast;
+
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -15,6 +17,8 @@ use crate::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, Unsubscribeable,
     },
 };
+
+use self::multicast::Connectable;
 
 enum Sender<T> {
     OSSender(std::sync::mpsc::Sender<T>),
@@ -715,7 +719,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 move |v: T| {
                     if let Ok(mut state) = state_cl.lock() {
                         if state.is_none() {
-                            *state = Some(v).map(std::convert::Into::into);
+                            *state = Some(std::convert::Into::into(v));
                         } else {
                             *state = state.as_ref().map(|s| acc(s.clone(), v));
                         }
@@ -765,6 +769,29 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     //     observable.set_fused(fused, defused);
     //     observable
     // }
+
+    /// Creates a connectable observable from the source observable.
+    ///
+    /// This operator converts the source observable into a connectable observable,
+    /// allowing multiple subscribers to connect to the same source without causing
+    /// multiple subscriptions to the underlying source.
+    ///
+    /// The actual emission of values from the source observable will occur only
+    /// after calling the [`connect()`] method on the resulting `Connectable` instance.
+    ///
+    /// [`connect()`]: multicast/struct.Connectable.html#method.connect
+    fn connectable(self) -> Connectable<T>
+    where
+        Self: Send + Sync + Sized + 'static,
+        T: Send + Sync + Clone,
+    {
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+        let mut connectable_observable = Connectable::new(Arc::new(Mutex::new(self)));
+        connectable_observable.set_subject_indicator(subject);
+        connectable_observable.set_fused(fused, defused);
+        connectable_observable
+    }
 
     /// Zips the values emitted by multiple observables into a single observable.
     ///
@@ -901,7 +928,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                         }
                         if tokio::runtime::Handle::try_current().is_ok() {
                             let ftr = std::future::poll_fn(|cx| {
-                                cx.waker().clone().wake();
+                                cx.waker().wake_by_ref();
                                 Poll::Ready::<()>(())
                             });
                             tokio::task::spawn(async {
@@ -1064,7 +1091,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
             if self.is_subject() {
                 // Skip opening a thread or a task if this method is called
-                // on one of the Subject's.
+                // on one of the `Subject` variants.
                 return Subscription::new(
                     UnsubscribeLogic::Logic(Box::new(move || {
                         unsubscriber.unsubscribe();
