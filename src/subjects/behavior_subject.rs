@@ -194,6 +194,7 @@ impl<T: Send + Sync + 'static> BehaviorSubject<T> {
 /// `subscribe` method for receiving emissions from the `BehaviorSubject`'s multicasting.
 /// You can also employ its `unsubscribe` method to close the `BehaviorSubject` and
 /// remove registered observers.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct BehaviorSubjectReceiver<T>(Arc<Mutex<BehaviorSubject<T>>>);
 
@@ -202,6 +203,7 @@ pub struct BehaviorSubjectReceiver<T>(Arc<Mutex<BehaviorSubject<T>>>);
 /// `BehaviorSubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
 /// `error`, and `complete` methods for multicasting emissions to all registered
 /// observers within the `BehaviorSubject`.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct BehaviorSubjectEmitter<T>(Arc<Mutex<BehaviorSubject<T>>>);
 

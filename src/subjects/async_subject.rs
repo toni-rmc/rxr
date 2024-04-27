@@ -184,6 +184,7 @@ impl<T: Send + Sync + 'static> AsyncSubject<T> {
 /// `subscribe` method for receiving emissions from the `AsyncSubject`'s multicasting.
 /// You can also employ its `unsubscribe` method to close the `AsyncSubject` and
 /// remove registered observers.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct AsyncSubjectReceiver<T>(Arc<Mutex<AsyncSubject<T>>>);
 
@@ -192,6 +193,7 @@ pub struct AsyncSubjectReceiver<T>(Arc<Mutex<AsyncSubject<T>>>);
 /// `AsyncSubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
 /// `error`, and `complete` methods for multicasting emissions to all registered
 /// observers within the `AsyncSubject`.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct AsyncSubjectEmitter<T>(Arc<Mutex<AsyncSubject<T>>>);
 

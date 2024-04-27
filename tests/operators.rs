@@ -292,6 +292,120 @@ fn skip_observable() {
 }
 
 #[test]
+fn first_observable() {
+    let emitted = Arc::new(Mutex::new(vec![]));
+    let emitted_cl = Arc::clone(&emitted);
+    let completed = Arc::new(Mutex::new(false));
+    let completed_cl = Arc::clone(&completed);
+
+    let mut observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    observer.on_complete(move || *completed_cl.lock().unwrap() = true);
+    let observable = generate_u32_observable(17, |_| {});
+
+    // Predicate will return `true`.
+    let mut o = observable.first(|v, _| v > 8, None);
+    let s = o.subscribe(observer);
+    let _ = s.join();
+
+    let emitted = emitted.lock().unwrap();
+    let emitted: &[u32] = emitted.as_ref();
+
+    assert!(
+        emitted.len() > 0,
+        "first operator failed to emit first value"
+    );
+    assert_eq!(
+        emitted,
+        &[9],
+        "first operator failed to emit correct first value"
+    );
+    assert!(
+        *completed.lock().unwrap() == true,
+        "first operator failed to complete"
+    );
+
+    let emitted = Arc::new(Mutex::new(vec![]));
+    let emitted_cl = Arc::clone(&emitted);
+
+    // Reset `completed` flag.
+    *completed.lock().unwrap() = false;
+    let completed_cl = Arc::clone(&completed);
+    let mut observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    observer.on_complete(move || *completed_cl.lock().unwrap() = true);
+    let observable = generate_u32_observable(14, |_| {});
+
+    // Predicate will not return `true`, default value provided.
+    let mut o = observable.first(|v, _| v > 100, Some(20));
+    let s = o.subscribe(observer);
+    let _ = s.join();
+
+    let emitted = emitted.lock().unwrap();
+    let emitted: &[u32] = emitted.as_ref();
+
+    assert_eq!(
+        emitted,
+        &[20],
+        "first operator failed to emit default value"
+    );
+    assert!(
+        *completed.lock().unwrap() == true,
+        "first operator failed to complete after taking default value"
+    );
+
+    use rxr::observable::EmptyError;
+
+    let emitted = Arc::new(Mutex::new(vec![]));
+    let emitted_cl = Arc::clone(&emitted);
+
+    // Reset `completed` flag.
+    *completed.lock().unwrap() = false;
+    let completed_cl = Arc::clone(&completed);
+    let errored = Arc::new(Mutex::new(None));
+    let errored_cl = Arc::clone(&errored);
+
+    let mut observer = Subscriber::on_next(move |v| {
+        emitted_cl.lock().unwrap().push(v);
+    });
+    observer.on_complete(move || *completed_cl.lock().unwrap() = true);
+    observer.on_error(move |err| {
+        // Check error type.
+        match err.downcast_ref::<EmptyError>() {
+            Some(e) => e,
+            None => unreachable!("first operator emitted wrong error type"),
+        };
+        *errored_cl.lock().unwrap() = Some(err);
+    });
+
+    let observable = generate_u32_observable(14, |_| {});
+
+    // Predicate will not return `true`, default value is not provided.
+    let mut o = observable.first(|v, _| v > 100, None);
+    let s = o.subscribe(observer);
+    let _ = s.join();
+
+    let emitted = emitted.lock().unwrap();
+    let emitted: &[u32] = emitted.as_ref();
+
+    assert_eq!(
+        emitted,
+        &[],
+        "first operator with no matches and no default value emitted a value when it shouldn't have"
+    );
+    assert!(
+        *completed.lock().unwrap() == false,
+        "first operator with no matches and no default value completed when it shouldn't have"
+    );
+    assert!(
+        errored.lock().unwrap().is_some(),
+        "first operator with no matches and no default value did not emitted error"
+    );
+}
+
+#[test]
 fn scan_observable() {
     let emitted = Arc::new(Mutex::new(Vec::with_capacity(8)));
     let emitted_cl = Arc::clone(&emitted);
@@ -490,7 +604,7 @@ Emitted {} which is its last value", notifier_last_emit_value
         let subscriber = Subscriber::on_next(|_| {});
 
         let observable = generate_u32_observable(outer_o_max_count, move |last_emit_value| {
-            // Check the last value emitted by the notifier observable.
+            // Check the last value emitted by the observable.
             *observable_result_clone.lock().unwrap() = catch_unwind(|| {
                 assert!(
                     last_emit_value < outer_o_max_count,
@@ -559,7 +673,7 @@ Emitted {} which is not its last value",
         let subscriber = Subscriber::on_next(|_| {});
 
         let observable = generate_u32_observable_async(outer_o_max_count, move |last_emit_value| {
-            // Check the last value emitted by the notifier observable.
+            // Check the last value emitted by the observable.
             *observable_result_clone.lock().unwrap() = catch_unwind(|| {
                 assert!(
                     last_emit_value < outer_o_max_count,
@@ -609,7 +723,7 @@ fn take_until_observable_with_subject_notifier() {
         let subscriber = Subscriber::on_next(|_| {});
 
         let observable = generate_u32_observable(outer_o_max_count, move |last_emit_value| {
-            // Check the last value emitted by the notifier observable.
+            // Check the last value emitted by the observable.
             *observable_result_clone.lock().unwrap() = catch_unwind(|| {
                 assert!(
                     last_emit_value < outer_o_max_count,

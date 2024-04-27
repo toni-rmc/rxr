@@ -86,6 +86,7 @@ type ErrorFn = Box<dyn FnMut(Arc<dyn Error + Send + Sync>) + Send + Sync>;
 ///
 /// Users can create a `Subscriber` instance using the `new` method and provide
 /// custom functions to handle the `next`, `error`, and `complete` events.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Subscriber<NextFnType> {
     next_fn: NextFn<NextFnType>,
     complete_fn: Option<CompleteFn>,
@@ -341,7 +342,7 @@ impl SubscriptionCollection {
     }
 
     #[allow(clippy::await_holding_lock)]
-
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn join_all_async(self) -> Pin<Box<dyn Future<Output = AwaitResult<()>> + 'static>> {
         Box::pin(async move {
             let mut subscriptionsh = self.subscriptions.lock().unwrap();
@@ -542,6 +543,7 @@ pub enum SubscriptionHandle {
 /// `Subscription` instance. This subscription can be used to manage the subscription,
 /// allowing for unsubscription or resource cleanup, and can also be used to await
 /// asynchronous observables that use `Tokio` tasks or OS threads.
+#[allow(clippy::used_underscore_binding)]
 pub struct Subscription {
     pub(crate) unsubscribe_logic: UnsubscribeLogic,
     pub(crate) subscription_future: SubscriptionHandle,

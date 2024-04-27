@@ -165,6 +165,7 @@ impl<T: 'static> Subject<T> {
 /// `subscribe` method for receiving emissions from the `Subject`'s multicasting.
 /// You can also employ its `unsubscribe` method to close the `Subject` and
 /// remove registered observers.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct SubjectReceiver<T>(Arc<Mutex<Subject<T>>>);
 
@@ -173,6 +174,7 @@ pub struct SubjectReceiver<T>(Arc<Mutex<Subject<T>>>);
 /// `SubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
 /// `error`, and `complete` methods for multicasting emissions to all registered
 /// observers within the `Subject`.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct SubjectEmitter<T>(Arc<Mutex<Subject<T>>>);
 

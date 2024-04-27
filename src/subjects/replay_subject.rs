@@ -286,6 +286,7 @@ impl<T: Send + Sync + 'static> ReplaySubject<T> {
 /// `subscribe` method for receiving emissions from the `ReplaySubject`'s multicasting.
 /// You can also employ its `unsubscribe` method to close the `ReplaySubject` and
 /// remove registered observers.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct ReplaySubjectReceiver<T>(Arc<Mutex<ReplaySubject<T>>>);
 
@@ -294,6 +295,7 @@ pub struct ReplaySubjectReceiver<T>(Arc<Mutex<ReplaySubject<T>>>);
 /// `ReplaySubjectEmitter` acts as an `Observer`, allowing you to utilize its `next`,
 /// `error`, and `complete` methods for multicasting emissions to all registered
 /// observers within the `ReplaySubject`.
+#[allow(clippy::module_name_repetitions)]
 #[derive(Clone)]
 pub struct ReplaySubjectEmitter<T>(Arc<Mutex<ReplaySubject<T>>>);
 
