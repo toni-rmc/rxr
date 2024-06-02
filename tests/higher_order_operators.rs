@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use generate_observable::generate_u32_observable;
+use generate_observable::{generate_delayed_observable, generate_u32_observable};
 use rxr::subscribe::Subscriber;
 use rxr::{ObservableExt, Subscribeable};
 use tokio::time::sleep;
@@ -426,4 +426,96 @@ Projected {}, should project {}",
     if let Err(e) = m {
         std::panic::resume_unwind(e);
     };
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debounce_map_observable_notify_all() {
+    let emitted_values_store = Arc::new(Mutex::new(Vec::with_capacity(29)));
+    let emitted_values_store_cl = Arc::clone(&emitted_values_store);
+    let all_notifeirs_unsubscribed = Arc::new(Mutex::new(true));
+    let all_notifeirs_unsubscribed_cl = Arc::clone(&all_notifeirs_unsubscribed);
+
+    let o = Subscriber::on_next(move |v: u32| {
+        emitted_values_store_cl.lock().unwrap().push(v);
+    });
+
+    let end = 28;
+    let notifier_end = 28;
+
+    let outer_observable = generate_delayed_observable(end.try_into().unwrap(), 100, |_| {});
+
+    let subscription = outer_observable
+        .debounce_map(move |_| {
+            let all_notifeirs_unsubscribed_cl = Arc::clone(&all_notifeirs_unsubscribed_cl);
+            generate_delayed_observable(notifier_end, 20, move |v| {
+                // Set flag to `false` if any notifier observable fails to unsubscribe.
+                if v == notifier_end - 1 {
+                    // None of the notifiers should reach their end value.
+                    *all_notifeirs_unsubscribed_cl.lock().unwrap() = false;
+                }
+            })
+        })
+        .subscribe(o);
+
+    let _ = subscription.join_concurrent().await;
+
+    // Give some tome for the last inner observable to finish.
+    sleep(Duration::from_millis(2000)).await;
+
+    let stored_cnt = emitted_values_store.lock().unwrap().len();
+    assert_eq!(
+        *all_notifeirs_unsubscribed.lock().unwrap(),
+        true,
+        "one or more duration observables failed to unsubscribe"
+    );
+    assert_eq!(
+        stored_cnt, end,
+        "debounced observable should have emitted all {end} values, emitted {stored_cnt}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debounce_map_observable_notify_none() {
+    let emitted_values_store = Arc::new(Mutex::new(Vec::with_capacity(29)));
+    let emitted_values_store_cl = Arc::clone(&emitted_values_store);
+    let all_notifeirs_unsubscribed = Arc::new(Mutex::new(true));
+    let all_notifeirs_unsubscribed_cl = Arc::clone(&all_notifeirs_unsubscribed);
+
+    let o = Subscriber::on_next(move |v: u32| {
+        emitted_values_store_cl.lock().unwrap().push(v);
+    });
+
+    let end = 28;
+    let notifier_end = 28;
+
+    let outer_observable = generate_delayed_observable(end.try_into().unwrap(), 20, |_| {});
+
+    let subscription = outer_observable
+        .debounce_map(move |_| {
+            let all_notifeirs_unsubscribed_cl = Arc::clone(&all_notifeirs_unsubscribed_cl);
+            generate_delayed_observable(notifier_end, 100, move |v| {
+                // Set flag to `false` if any notifier observable fails to unsubscribe.
+                if v == notifier_end - 1 {
+                    // None of the notifiers should reach their end value.
+                    *all_notifeirs_unsubscribed_cl.lock().unwrap() = false;
+                }
+            })
+        })
+        .subscribe(o);
+
+    let _ = subscription.join_concurrent().await;
+
+    // Give some tome for the last inner observable to finish.
+    sleep(Duration::from_millis(4000)).await;
+
+    let stored_cnt = emitted_values_store.lock().unwrap().len();
+    assert_eq!(
+        *all_notifeirs_unsubscribed.lock().unwrap(),
+        true,
+        "one or more duration observables failed to unsubscribe"
+    );
+    assert_eq!(
+        stored_cnt, 1,
+        "debounced observable should have emitted one value upon complete, emitted {stored_cnt}"
+    );
 }

@@ -36,10 +36,12 @@ use crate::{
 /// `AsyncSubject` completion
 ///
 ///```no_run
+/// use std::fmt::Display;
+///
 /// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
 ///
-/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+/// pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
 ///         |_| eprintln!("Error"),
@@ -61,11 +63,7 @@ use crate::{
 /// receiver
 ///     .clone() // Shallow clone: clones only the pointer to the `AsyncSubject`.
 ///     .map(|v| format!("mapped {}", v))
-///     .subscribe(Subscriber::new(
-///         move |v| println!("Subscriber #2 emitted: {}", v),
-///         |_| eprintln!("Error"),
-///         || println!("Completed 2"),
-///     ));
+///     .subscribe(create_subscriber(2));
 ///
 /// // Registers `Subscriber` 3.
 /// receiver.subscribe(create_subscriber(3));
@@ -92,7 +90,7 @@ use crate::{
 /// use rxr::{subjects::AsyncSubject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
 ///
-/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+/// pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
 ///         move |e| eprintln!("Error: {} {}", e, subscriber_id),
@@ -125,11 +123,7 @@ use crate::{
 /// receiver
 ///     .clone() // Shallow clone: clones only the pointer to the `AsyncSubject`.
 ///     .map(|v| format!("mapped {}", v))
-///     .subscribe(Subscriber::new(
-///         move |v| println!("Subscriber #2 emitted: {}", v),
-///         |e| eprintln!("Error: {} 2", e),
-///         || println!("Completed"),
-///     ));
+///     .subscribe(create_subscriber(2));
 ///
 /// // Registers `Subscriber` 3.
 /// receiver.subscribe(create_subscriber(3));

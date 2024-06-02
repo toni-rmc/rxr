@@ -10,10 +10,12 @@
 //!
 //! To run this example, execute `cargo run --example behavior_subject`.
 
+use std::fmt::Display;
+
 use rxr::{subjects::BehaviorSubject, subscribe::Subscriber};
 use rxr::{ObservableExt, Observer, Subscribeable};
 
-pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
     Subscriber::new(
         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
         |_| eprintln!("Error"),
@@ -37,11 +39,7 @@ pub fn main() {
     receiver
         .clone() // Shallow clone: clones only the pointer to the `BehaviorSubject` object.
         .map(|v| format!("mapped {}", v))
-        .subscribe(Subscriber::new(
-            move |v| println!("Subscriber #2 emitted: {}", v),
-            |_| eprintln!("Error"),
-            || println!("Completed 2"),
-        ));
+        .subscribe(create_subscriber(2));
 
     // Registers `Subscriber` 3 and emits (now the default) value 102 to it.
     receiver.subscribe(create_subscriber(3));
@@ -53,5 +51,6 @@ pub fn main() {
     // Subscriber 4: post-completion subscribe, completes immediately.
     receiver.subscribe(create_subscriber(4));
 
-    emitter.next(104); // Called post-completion, does not emit.
+    // Called post-completion, does not emit.
+    emitter.next(104);
 }

@@ -1,6 +1,8 @@
 mod generate_observable;
 
-use generate_observable::{generate_u32_observable, generate_u32_observable_async};
+use generate_observable::{
+    generate_delayed_observable, generate_u32_observable, generate_u32_observable_async,
+};
 
 use std::{
     panic::{catch_unwind, resume_unwind},
@@ -148,6 +150,75 @@ fn filter_observable() {
         last_emit_value.lock().unwrap().last_value == last - 1,
         "filter operator did not emit"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debounce_observable_emit_all() {
+    let emitted_values_store = Arc::new(Mutex::new(Vec::with_capacity(29)));
+    let emitted_values_store_cl = Arc::clone(&emitted_values_store);
+
+    let o = Subscriber::on_next(move |v: u32| {
+        emitted_values_store_cl.lock().unwrap().push(v);
+    });
+
+    let end = 28;
+
+    let observable = generate_delayed_observable(end.try_into().unwrap(), 100, |_| {});
+
+    // The debounce duration is shorter than the interval between emissions from the
+    // source observable. Thus, every value from the source should be emitted.
+    let subscription = observable.debounce(Duration::from_millis(10)).subscribe(o);
+
+    let _ = subscription.join_concurrent().await;
+
+    let stored_cnt = emitted_values_store.lock().unwrap().len();
+
+    assert_eq!(
+        stored_cnt, end,
+        "debounced observable should have emitted all {end} values, emitted {stored_cnt}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debounce_observable_emit_one() {
+    let emitted_values_store = Arc::new(Mutex::new(Vec::with_capacity(29)));
+    let emitted_values_store_cl = Arc::clone(&emitted_values_store);
+
+    let o = Subscriber::on_next(move |v: u32| {
+        emitted_values_store_cl.lock().unwrap().push(v);
+    });
+
+    let end = 28;
+
+    let observable = generate_delayed_observable(end.try_into().unwrap(), 100, |_| {});
+
+    // The debounce duration is longer than the interval between emissions from the
+    // source observable. Only the last value should be emitted upon source completion.
+    let subscription = observable
+        .debounce(Duration::from_millis(1400))
+        .subscribe(o);
+
+    let _ = subscription.join_concurrent().await;
+
+    let stored_cnt = emitted_values_store.lock().unwrap().len();
+
+    assert_eq!(
+        stored_cnt, 1,
+        "debounced observable should have emitted one last value upon completion, emitted {stored_cnt}"
+    );
+
+    let last_value = emitted_values_store.lock().unwrap().pop();
+
+    match last_value {
+        Some(last_value) => {
+            assert_eq!(
+                last_value, end - 1,
+                "the last value emitted by the debounced observable upon completion should be {}, not {last_value}",
+                end - 1
+            );
+        }
+        None => unreachable!(),
+    }
 }
 
 #[test]

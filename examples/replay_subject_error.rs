@@ -23,7 +23,7 @@ use rxr::{
 };
 use rxr::{ObservableExt, Observer, Subscribeable};
 
-pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
     Subscriber::new(
         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
         move |e| eprintln!("Error: {} {}", e, subscriber_id),
@@ -58,16 +58,13 @@ pub fn main() {
     receiver
         .clone() // Shallow clone: clones only the pointer to the `ReplaySubject` object.
         .map(|v| format!("mapped {}", v))
-        .subscribe(Subscriber::new(
-            move |v| println!("Subscriber #2 emitted: {}", v),
-            |e| eprintln!("Error: {} 2", e),
-            || println!("Completed"),
-        ));
+        .subscribe(create_subscriber(2));
 
     // Registers `Subscriber` 3 and emits buffered values (101, 102) to it.
     receiver.subscribe(create_subscriber(3));
 
-    emitter.next(103); // Stores 103 and emits it to registered `Subscriber`'s 1, 2 and 3.
+    // Stores 103 and emits it to registered `Subscriber`'s 1, 2 and 3.
+    emitter.next(103);
 
     // Calls `error` on registered `Subscriber`'s 1, 2 and 3.
     emitter.error(Arc::new(ReplaySubjectError(
@@ -78,7 +75,8 @@ pub fn main() {
     // and emits error.
     receiver.subscribe(create_subscriber(4));
 
-    emitter.next(104); // Called post-error, does not emit.
+    // Called post-error, does not emit.
+    emitter.next(104);
 
     // Closes receiver and clears registered subscribers.
     receiver.unsubscribe();

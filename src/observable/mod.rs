@@ -9,7 +9,7 @@ pub mod multicast;
 use std::{
     collections::VecDeque,
     error::Error,
-    sync::{Arc, Mutex},
+    sync::{mpsc::RecvTimeoutError, Arc, Mutex},
     time::Duration,
 };
 
@@ -529,7 +529,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn map<U, F>(mut self, f: F) -> Observable<U>
     where
         Self: Sized + Send + Sync + 'static,
-        F: FnOnce(T) -> U + Copy + Sync + Send + 'static,
+        F: FnOnce(T) -> U + Copy + Send + Sync + 'static,
         U: 'static,
     {
         let subject = self.is_subject();
@@ -571,7 +571,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn filter<P>(mut self, predicate: P) -> Observable<T>
     where
         Self: Sized + Send + Sync + 'static,
-        P: (FnOnce(&T) -> bool) + Copy + Sync + Send + 'static,
+        P: FnOnce(&T) -> bool + Copy + Sync + Send + 'static,
     {
         let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
@@ -639,6 +639,254 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                 },
                 move || {
                     o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Emits items from the source observable only after a specified duration has
+    /// passed without another emission.
+    ///
+
+    /// The `debounce` operator delays emissions from the source observable until a
+    /// specified duration has passed without another item being emitted. If a new
+    /// item is emitted before the duration elapses, the previous emission is
+    /// discarded, and the timer resets.
+    ///
+    /// If the source completes during the debounce period, the last cached item is
+    /// emitted before the completion event is forwarded to the output observable.
+    /// If an error occurs during or after the debounce period, only the error event
+    /// is forwarded to the output observable, and the cached item is not emitted.
+    ///
+    /// This operator is useful for scenarios where you want to wait for a pause in
+    /// emissions before processing the latest item, effectively ignoring intermediate
+    /// values that are emitted too quickly.
+    fn debounce(mut self, due_time: Duration) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+        T: Send,
+    {
+        struct LastValue<T> {
+            value: T,
+        }
+
+        enum Signal {
+            Interrupt,
+        }
+
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let last_value: Arc<Mutex<Option<LastValue<T>>>> = Arc::new(Mutex::new(None));
+            let last_value_cl = Arc::clone(&last_value);
+            let last_value_cl_emit = Arc::clone(&last_value);
+
+            let (tx, rx) = std::sync::mpsc::channel();
+
+            // Start a duration scheduler in a separate thread.
+            std::thread::spawn(move || {
+                loop {
+                    match rx.recv_timeout(due_time) {
+                        Ok(Signal::Interrupt) => {
+                            // Noop. A new value has arrived, interrupting the wait.
+                            // Proceed to the next loop iteration to call the receiver
+                            // with a timeout again and wait for the due time.
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            // Emit the last value when the due time expires.
+                            if let Some(last_value) = last_value_cl_emit.lock().unwrap().take() {
+                                o_shared.lock().unwrap().next(last_value.value);
+                            }
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+            });
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    // Store new value for emitting.
+                    *last_value.lock().unwrap() = Some(LastValue { value: v });
+
+                    // Send interrupt signal to scheduling thread so it resets waiting time.
+                    let _ = tx.send(Signal::Interrupt);
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    // When source completes emit last cached value, if any.
+                    if let Some(lv) = last_value_cl.lock().unwrap().take() {
+                        o_cloned_c.lock().unwrap().next(lv.value);
+                    }
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Emits a notification from the source observable only after a specific time
+    /// duration determined by another observable has elapsed without another source
+    /// emission occurring.
+    ///
+    /// The `debounce_map` delays notifications from the source observable but
+    /// discards any pending delayed emissions if a new notification arrives. This
+    /// operator tracks the latest notification from the source observable and
+    /// generates a duration observable by invoking the `duration_selector` function.
+    /// An emission occurs only when the duration observable emits a next
+    /// notification, and no other notification has been emitted by the source
+    /// observable since the duration observable was spawned. If a new notification
+    /// arrives before the duration observable emits, the previous pending
+    /// notification will be discarded, and a new duration will be scheduled using
+    /// the `duration_selector`.
+    ///
+    /// If the source observable completes while the scheduled duration is ongoing,
+    /// the last cached notification is emitted before the completion event is
+    /// forwarded to the output observable. If an error event occurs during or after
+    /// the scheduled duration, only the error event is forwarded to the output
+    /// observable. The cached notification is not emitted in this case.
+    fn debounce_map<R: 'static, F>(mut self, duration_selector: F) -> Observable<T>
+    where
+        Self: Sized + Send + Sync + 'static,
+        F: FnMut(&T) -> Observable<R> + Sync + Send + 'static,
+        T: Send,
+    {
+        fn unsubscribe_duration_observable(
+            duration_subscription: &Arc<Mutex<Option<Subscription>>>,
+        ) {
+            if let Some(subscription) = duration_subscription.lock().unwrap().take() {
+                subscription.unsubscribe();
+            };
+        }
+
+        struct LastValue<T> {
+            value: T,
+            id: u64,
+        }
+
+        let duration_selector = Arc::new(Mutex::new(duration_selector));
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let duration_selector = Arc::clone(&duration_selector);
+
+            let last_value: Arc<Mutex<Option<LastValue<T>>>> = Arc::new(Mutex::new(None));
+            let last_value_cl = Arc::clone(&last_value);
+            let duration_subscription: Arc<Mutex<Option<Subscription>>> =
+                Arc::new(Mutex::new(None));
+            let duration_subscription_cl_c = Arc::clone(&duration_subscription);
+            let duration_subscription_cl_e = Arc::clone(&duration_subscription);
+
+            let mut duration_id = 0_u64;
+            let mut u = Subscriber::new(
+                move |v| {
+                    // Make a local copy so `duration_id` is incremented with each
+                    // source observable emit.
+                    duration_id = duration_id.wrapping_add(1);
+                    let o_shared = Arc::clone(&o_shared);
+                    let o_cloned_e = Arc::clone(&o_shared);
+                    let duration_selector = Arc::clone(&duration_selector);
+                    let last_value_cl = Arc::clone(&last_value);
+                    let duration_subscription_cl = Arc::clone(&duration_subscription);
+
+                    // If source emitted new value before duration observable emitted,
+                    // unsubscribe current duration observable before scheduling new one.
+                    unsubscribe_duration_observable(&duration_subscription);
+
+                    let mut duration_observable = duration_selector.lock().unwrap()(&v);
+
+                    // Store new value for emitting.
+                    *last_value.lock().unwrap() = Some(LastValue {
+                        value: v,
+                        id: duration_id,
+                    });
+
+                    drop(duration_selector);
+
+                    let duration_subscriber = Subscriber::new(
+                        move |_| {
+                            let is_stale;
+                            let duration_id = duration_id;
+                            if let Ok(mut glv) = last_value_cl.try_lock() {
+                                // If `last_value` is already taken, or if `duration_id`'s
+                                // don't match, this duration observer `next()` call
+                                // is stale and should be returned immediately.
+                                is_stale = glv.as_ref().map_or_else(
+                                    || true,
+                                    |lv| {
+                                        if lv.id > duration_id {
+                                            return true;
+                                        };
+                                        false
+                                    },
+                                );
+                                // If duration emit is stale return immediately to
+                                // prevent it from emitting last value that was cached
+                                // later by the source observable and to unsubscribe
+                                // duration observable that does not belong to it.
+                                if is_stale {
+                                    return;
+                                }
+
+                                if let Some(lv) = glv.take() {
+                                    o_shared.lock().unwrap().next(lv.value);
+                                }
+                                // Unsubscribe duration observable right after forwarding
+                                // last value to the source. We are only interested in
+                                // the first notification from it.
+                                unsubscribe_duration_observable(&duration_subscription_cl);
+                            }
+                        },
+                        move |observable_error| {
+                            o_cloned_e.lock().unwrap().error(observable_error);
+                        },
+                        move || {},
+                    );
+                    // Schedule new duration.
+                    let s = duration_observable.subscribe(duration_subscriber);
+                    *duration_subscription.lock().unwrap() = Some(s);
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                    unsubscribe_duration_observable(&duration_subscription_cl_e);
+                },
+                move || {
+                    // When source completes emit last cached value, if any.
+                    if let Some(lv) = last_value_cl.lock().unwrap().take() {
+                        o_cloned_c.lock().unwrap().next(lv.value);
+                    }
+                    o_cloned_c.lock().unwrap().complete();
+                    unsubscribe_duration_observable(&duration_subscription_cl_c);
                 },
             );
             u.take_wrapped = take_wrapped;
@@ -1691,7 +1939,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn switch_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
         Self: Sized + Send + Sync + 'static,
-        F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
+        F: FnMut(T) -> Observable<R> + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
         let subject = self.is_subject();
@@ -1734,7 +1982,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
                     if let Some(subscription) = current_subscription.take() {
                         subscription.unsubscribe();
-                    }
+                    };
 
                     let s = inner_observable.subscribe(inner_subscriber);
                     current_subscription = Some(s);
@@ -1775,7 +2023,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn merge_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
         Self: Sized + Send + Sync + 'static,
-        F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
+        F: FnMut(T) -> Observable<R> + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
         let subject = self.is_subject();
@@ -1852,7 +2100,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn concat_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
         Self: Sized + Send + Sync + 'static,
-        F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
+        F: FnMut(T) -> Observable<R> + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
         let subject = self.is_subject();
@@ -1941,7 +2189,7 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     fn exhaust_map<R: 'static, F>(mut self, project: F) -> Observable<R>
     where
         Self: Sized + Send + Sync + 'static,
-        F: (FnMut(T) -> Observable<R>) + Sync + Send + 'static,
+        F: FnMut(T) -> Observable<R> + Sync + Send + 'static,
     {
         let project = Arc::new(Mutex::new(project));
         let subject = self.is_subject();
@@ -2066,6 +2314,3 @@ impl<T: 'static> Subscribeable for Observable<T> {
 }
 
 impl<O, T: 'static> ObservableExt<T> for O where O: Subscribeable<ObsType = T> {}
-
-#[cfg(test)]
-mod tests;

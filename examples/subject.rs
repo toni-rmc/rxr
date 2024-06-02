@@ -7,10 +7,12 @@
 //!
 //! To run this example, execute `cargo run --example subject`.
 
+use std::fmt::Display;
+
 use rxr::{subjects::Subject, subscribe::Subscriber};
 use rxr::{ObservableExt, Observer, Subscribeable};
 
-pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
     Subscriber::new(
         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
         |_| eprintln!("Error"),
@@ -33,21 +35,20 @@ pub fn main() {
     receiver
         .clone() // Shallow clone: clones only the pointer to the `Subject` object.
         .map(|v| format!("mapped {}", v))
-        .subscribe(Subscriber::new(
-            move |v| println!("Subscriber #2 emitted: {}", v),
-            |_| eprintln!("Error"),
-            || println!("Completed 2"),
-        ));
+        .subscribe(create_subscriber(2));
 
     // Registers `Subscriber` 3.
     receiver.subscribe(create_subscriber(3));
 
-    emitter.next(103); // Emits 103 to registered `Subscriber`'s 1, 2 and 3.
+    // Emits 103 to registered `Subscriber`'s 1, 2 and 3.
+    emitter.next(103);
 
-    emitter.complete(); // Calls `complete` on registered `Subscriber`'s 1, 2 and 3.
+    // Calls `complete` on registered `Subscriber`'s 1, 2 and 3.
+    emitter.complete();
 
     // Subscriber 4: post-completion subscribe, completes immediately.
     receiver.subscribe(create_subscriber(4));
 
-    emitter.next(104); // Called post-completion, does not emit.
+    // Called post-completion, does not emit.
+    emitter.next(104);
 }

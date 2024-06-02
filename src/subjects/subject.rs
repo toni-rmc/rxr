@@ -34,10 +34,12 @@ use crate::{
 /// `Subject` completion
 ///
 ///```no_run
+/// use std::fmt::Display;
+///
 /// use rxr::{subjects::Subject, subscribe::Subscriber};
 /// use rxr::{ObservableExt, Observer, Subscribeable};
 ///
-/// pub fn create_subscriber(subscriber_id: i32) -> Subscriber<i32> {
+/// pub fn create_subscriber<T: Display>(subscriber_id: i32) -> Subscriber<T> {
 ///     Subscriber::new(
 ///         move |v| println!("Subscriber #{} emitted: {}", subscriber_id, v),
 ///         |_| eprintln!("Error"),
@@ -59,11 +61,7 @@ use crate::{
 /// receiver
 ///     .clone() // Shallow clone: clones only the pointer to the `Subject`.
 ///     .map(|v| format!("mapped {}", v))
-///     .subscribe(Subscriber::new(
-///         |v| println!("Subscriber #2 emitted: {}", v),
-///         |_| eprintln!("Error"),
-///         || println!("Completed 2"),
-///     ));
+///     .subscribe(create_subscriber(2));
 ///
 /// // Registers `Subscriber` 3.
 /// receiver.subscribe(create_subscriber(3));
