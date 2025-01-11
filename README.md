@@ -180,7 +180,7 @@ Add a line into your Cargo.toml:
 
 ```toml
 [dependencies]
-rxr = "0.1.9"
+rxr = "0.1.10"
 ```
 
 ## License

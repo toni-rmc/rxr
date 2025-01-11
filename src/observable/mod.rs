@@ -5,6 +5,7 @@
 
 mod background_unsubscribe;
 pub mod multicast;
+pub mod timestamp;
 
 use std::{
     collections::VecDeque,
@@ -19,6 +20,7 @@ use crate::{
     subscription::subscribe::{
         Subscribeable, Subscriber, Subscription, SubscriptionHandle, Unsubscribeable,
     },
+    TimestampedEmit,
 };
 
 use self::{background_unsubscribe::setup_unsubscribe_channel, multicast::Connectable};
@@ -653,7 +655,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     /// Emits items from the source observable only after a specified duration has
     /// passed without another emission.
     ///
-
     /// The `debounce` operator delays emissions from the source observable until a
     /// specified duration has passed without another item being emitted. If a new
     /// item is emitted before the duration elapses, the previous emission is
@@ -1700,6 +1701,44 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
                     if let Ok(mut s) = observer_cl.lock() {
                         s.complete();
                     }
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
+    /// Adds a timestamp to each item from an observable to indicate the exact time
+    /// it was emitted.
+    fn timestamp(mut self) -> Observable<TimestampedEmit<T>>
+    where
+        Self: Sized + Send + Sync + 'static,
+    {
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            let o_shared = Arc::new(Mutex::new(o));
+            let o_cloned_e = Arc::clone(&o_shared);
+            let o_cloned_c = Arc::clone(&o_shared);
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    let timestamped_emit = TimestampedEmit::new(v);
+                    o_shared.lock().unwrap().next(timestamped_emit);
+                },
+                move |observable_error| {
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
                     o_cloned_c.lock().unwrap().complete();
                 },
             );

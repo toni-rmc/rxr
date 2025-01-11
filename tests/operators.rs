@@ -12,7 +12,7 @@ use std::{
 
 use rxr::{
     subscribe::{Subscriber, Subscription, SubscriptionHandle, UnsubscribeLogic},
-    Observable, ObservableExt, Observer, Subscribeable,
+    Observable, ObservableExt, Observer, Subscribeable, TimestampedEmit,
 };
 
 struct CheckFinished {
@@ -359,6 +359,72 @@ fn skip_observable() {
     assert!(
         last_emit_value.lock().unwrap().completed,
         "skip operator did not completed observable"
+    );
+}
+
+#[test]
+fn timestamped_emit() {
+    let last = 10;
+    let last_emit_value = Arc::new(Mutex::new(CheckFinished {
+        last_value: 0,
+        completed: false,
+    }));
+    let last_emit_value_c1 = last_emit_value.clone();
+    let last_emit_value_c2 = last_emit_value.clone();
+
+    let o = Subscriber::new(
+        move |v| {
+            assert!(v >= 0, "integer less than 0 emitted {}", v);
+            assert!(v <= 10, "integer greater than 10 emitted {}", v);
+        },
+        |_observable_error| {},
+        move || {},
+    );
+
+    let mut s = Observable::new(move |mut o: Subscriber<_>| {
+        for i in 0..last + 1 {
+            o.next(i);
+        }
+        o.complete();
+        Subscription::new(UnsubscribeLogic::Nil, SubscriptionHandle::Nil)
+    });
+
+    s.subscribe(o);
+
+    let mut s = s.timestamp();
+
+    let o = Subscriber::new(
+        move |v: TimestampedEmit<i32>| {
+            assert!(
+                v.timestamp > 0,
+                "timestamped value should have timestamp greater than 0, got {}",
+                v.timestamp
+            );
+            assert!(
+                v.value >= 0,
+                "timestamped value should have value greater than 0, got {}",
+                v.value
+            );
+            if v.value == last {
+                last_emit_value_c1.lock().unwrap().last_value = v.value;
+            }
+        },
+        |_observable_error| {},
+        move || {
+            last_emit_value_c2.lock().unwrap().completed = true;
+            assert!(
+                last_emit_value_c2.lock().unwrap().last_value == last,
+                "last emitted value should be {}, but it is {}",
+                last,
+                last_emit_value_c2.lock().unwrap().last_value
+            );
+        },
+    );
+
+    s.subscribe(o);
+    assert!(
+        last_emit_value.lock().unwrap().completed,
+        "timestamp operator did not completed observable"
     );
 }
 

@@ -19,6 +19,7 @@ pub mod subjects;
 pub mod subscription;
 
 // pub use subscribe::*;
+pub use observable::timestamp::TimestampedEmit;
 pub use observable::*;
 pub use observer::Observer;
 pub use subjects::Subject;
