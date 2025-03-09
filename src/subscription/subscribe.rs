@@ -461,7 +461,6 @@ impl SubscriptionCollection {
                 // Start event loop in OS thread to accept unsubscribe signal from
                 // async observables that use OS threads.
                 std::thread::spawn(move || loop {
-                    // println!("+++++++++  THREAD event loop");
                     if *signal_sent_cl2.lock().unwrap() {
                         let r = stored_threads_subscriptions.pop();
                         if let Some(s) = r {
@@ -483,7 +482,6 @@ impl SubscriptionCollection {
             // if runtime flavor is `current_thread`.
             let h = task::spawn(async move {
                 loop {
-                    // println!("*********  TASK event loop");
                     if *signal_sent_cl.lock().unwrap() {
                         let r = stored.pop();
                         if let Some(s) = r {

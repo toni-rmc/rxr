@@ -1,6 +1,6 @@
 [package]
 name = "rxr"
-version = "0.1.10"
+version = "0.1.11"
 authors = ["Toni Romic <toni.rmc@gmail.com>"]
 edition = "2021"
 description = "Reactive extensions for event-driven applications"
@@ -12,4 +12,4 @@ categories = ["asynchronous", "concurrency"]
 keywords = ["observables", "subjects", "reactive", "extensions", "event-driven"]
 
 [dependencies]
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
+tokio = { version = "1.44.0", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }

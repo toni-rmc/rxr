@@ -62,7 +62,7 @@ fn main() {
                 // Emit the value to the subscriber.
                 o.next(i);
                 // Important. Put an await point after each emit or after some emits.
-                // This allows the `take()` operator to function properly.
+                // This allows the `take` operator to function properly.
                 std::thread::sleep(Duration::from_millis(1));
             }
             // Signal completion to the subscriber.
@@ -93,8 +93,8 @@ fn main() {
     // Observables are cold so if you comment out the statement bellow nothing
     // will be emitted.
     let subscription = observable
-        // take utilizes our unsubscribe function to stop background emissions after
-        // a specified item count.
+        // `take` utilizes our unsubscribe function to stop background emissions
+        // after a specified item count.
         .take(500)
         .map(|v| format!("Mapped {}", v))
         .subscribe(observer);
@@ -108,7 +108,7 @@ fn main() {
     // Allow some time for the main thread to confirm that the observable indeed
     // isn't emitting.
     std::thread::sleep(Duration::from_millis(2000));
-    println!("`main` function done")
+    println!("`main` function done");
 }
 ```
 
@@ -131,7 +131,7 @@ pub fn create_subscriber<T: Display>(subscriber_id: u32) -> Subscriber<T> {
 }
 
 pub fn main() {
-    // Make an Observable.
+    // Make an `Observable`.
     let mut observable = Observable::new(move |mut o: Subscriber<_>| {
         for i in 0..10 + 1 {
             o.next(i);
@@ -152,7 +152,7 @@ pub fn main() {
         // We're cloning the receiver so we can use it again.
         // Shallow clone: clones only the pointer to the `Subject`.
         .clone()
-        .take(7) // For performance, prioritize placing `take()` as the first operator.
+        .take(7) // For performance, prioritize placing `take` as the first operator.
         .delay(1000)
         .map(|v| format!("mapped {}", v))
         .subscribe(create_subscriber(2));
@@ -180,7 +180,7 @@ Add a line into your Cargo.toml:
 
 ```toml
 [dependencies]
-rxr = "0.1.10"
+rxr = "0.1.11"
 ```
 
 ## License

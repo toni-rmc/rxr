@@ -76,9 +76,7 @@ impl Receiver<bool> {
             Receiver::TokioReceiver(mut receiver) => {
                 tokio::task::spawn(async move {
                     if receiver.recv().await.is_some() {
-                        // println!("SIGNAL received");
                         if let Some(s) = unsubscriber.lock().unwrap().take() {
-                            // println!("UNSUBSCRIBE called");
                             s.unsubscribe();
                         }
                     }
@@ -87,9 +85,7 @@ impl Receiver<bool> {
             Receiver::OSReceiver(receiver) => {
                 std::thread::spawn(move || {
                     if receiver.recv().is_ok() {
-                        // println!("---- SIGNAL received");
                         if let Some(s) = unsubscriber.lock().unwrap().take() {
-                            // println!("UNSUBSCRIBE called");
                             s.unsubscribe();
                         }
                     }

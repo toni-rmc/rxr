@@ -304,6 +304,60 @@ fn delay_observable() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn buffer_observable() {
+    let last = 100;
+    let last_emit_value = Arc::new(Mutex::new(CheckFinished {
+        last_value: 0,
+        completed: false,
+    }));
+    let last_emit_value_c1 = last_emit_value.clone();
+    let last_emit_value_c2 = last_emit_value.clone();
+    let values_emitted = Arc::new(Mutex::new(false));
+    let values_emitted_cl = Arc::clone(&values_emitted);
+
+    let o = Subscriber::new(
+        move |v: Vec<u32>| {
+            if v.len() == 0 {
+                return;
+            }
+            *values_emitted_cl.lock().unwrap() = true;
+            let prev = last_emit_value_c1.lock().unwrap().last_value;
+            last_emit_value_c1.lock().unwrap().last_value =
+                (*v.last().unwrap()).try_into().unwrap();
+            if v.first().unwrap() == &0 {
+                return;
+            }
+            assert_eq!(
+                prev as u32,
+                *v.first().unwrap() - 1,
+                "buffer operator does not emit values in order, previously emitted {}, expected {}",
+                prev,
+                *v.first().unwrap() - 1
+            );
+        },
+        |_observable_error| {},
+        move || {
+            last_emit_value_c2.lock().unwrap().completed = true;
+        },
+    );
+
+    let observable = generate_u32_observable_async(last as u32, |_| {}).await;
+    let subscription = observable
+        .buffer(|| generate_delayed_observable(95, 25, |_| {}))
+        .subscribe(o);
+    subscription.join_concurrent().await.unwrap();
+
+    assert!(
+        *values_emitted.lock().unwrap(),
+        "buffer operator did not emit any values"
+    );
+    assert!(
+        last_emit_value.lock().unwrap().completed,
+        "buffer operator did not completed observable"
+    );
+}
+
 #[test]
 fn skip_observable() {
     let last = 10;

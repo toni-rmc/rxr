@@ -31,6 +31,36 @@ enum EmittedValue<T> {
     Error(Arc<dyn std::error::Error + Send + Sync>),
 }
 
+/// A trait representing a closing notifier for the `buffer` operator.
+///
+/// Implementors of this trait act as signals to determine when a buffered collection
+/// of items should be emitted by the `buffer` operator. When the notifier emits a
+/// value, the current buffer is flushed and emitted downstream.
+pub trait Notifier {
+    /// The type of items emitted by the notifier.
+    type Item;
+
+    /// Converts the notifier into an observable.
+    fn into_observable(self) -> Observable<Self::Item>;
+}
+
+impl<T> Notifier for Observable<T> {
+    type Item = T;
+    fn into_observable(self) -> Observable<Self::Item> {
+        self
+    }
+}
+
+impl<T, F> Notifier for F
+where
+    F: FnOnce() -> Observable<T>,
+{
+    type Item = T;
+    fn into_observable(self) -> Observable<Self::Item> {
+        self()
+    }
+}
+
 /// Error indicating that an observable sequence is empty.
 #[derive(Debug, Clone)]
 pub struct EmptyError;
@@ -45,6 +75,13 @@ impl Error for EmptyError {}
 
 type SubscribeFn<T> = Box<dyn FnMut(Subscriber<T>) -> Subscription + Send + Sync>;
 type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
+
+macro_rules! arc_mutex_clone {
+    ($val:expr => $name:ident$(: $explicit:ty)?, $(@$name_cl:ident),+) => {
+        let $name$(: $explicit)? = Arc::new(Mutex::new($val));
+        $(let $name_cl = Arc::clone(&$name);)+
+    };
+}
 
 /// The `Observable` struct represents a source of values that can be observed
 /// and transformed.
@@ -121,7 +158,7 @@ type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
 ///             // Emit the value to the subscriber.
 ///             o.next(i);
 ///             // Important. Put an await point after each emit or after some emits.
-///             // This allows the `take()` operator to function properly.
+///             // This allows the `take` operator to function properly.
 ///             // Not required in this example.
 ///             std::thread::sleep(Duration::from_millis(1));
 ///         }
@@ -132,7 +169,7 @@ type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
 ///     // Return the subscription.
 ///     Subscription::new(
 ///         // In this example, we omit the unsubscribe functionality. Without it, we
-///         // can't unsubscribe, which prevents the `take()` operator, as well as
+///         // can't unsubscribe, which prevents the `take` operator, as well as
 ///         // higher-order operators like `switch_map`, `merge_map`, `concat_map`,
 ///         // and `exhaust_map`, from functioning as expected.
 ///         UnsubscribeLogic::Nil,
@@ -212,7 +249,7 @@ type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
 ///             // Emit the value to the subscriber.
 ///             o.next(i);
 ///             // Important. Put an await point after each emit or after some emits.
-///             // This allows the `take()` operator to function properly.
+///             // This allows the `take` operator to function properly.
 ///             std::thread::sleep(Duration::from_millis(1));
 ///         }
 ///         // Signal completion to the subscriber.
@@ -306,7 +343,7 @@ type PendingObservables<T> = VecDeque<(Observable<T>, Subscriber<T>)>;
 ///                 // Emit the value to the subscriber.
 ///                 o.next(i);
 ///                 // Important. Put an await point after each emit or after some emits.
-///                 // This allows the `take()` operator to function properly.
+///                 // This allows the `take` operator to function properly.
 ///                 time::sleep(time::Duration::from_millis(1)).await;
 ///             }
 ///             // Signal completion to the subscriber.
@@ -652,6 +689,139 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
         observable
     }
 
+    /// Buffers the source observable values until the `closing_notifier` emits a
+    /// value, at which point it emits the buffered values as a single vector and
+    /// resets the buffer.
+    ///
+    /// This operator collects values emitted by the source observable into a buffer.
+    /// When the `closing_notifier` observable emits a value, the buffer is emitted
+    /// as a single vector of values, and the buffer is cleared. This process repeats
+    /// for each emission of the `closing_notifier`.
+    ///
+    /// The `closing_notifier` can be either an `Observable` or a callback that
+    /// returns an `Observable`.
+    ///
+    /// If the source observable completes, any remaining buffered values will be
+    /// emitted as a final vector before the resulting observable completes. If the
+    /// source observable errors, the error is forwarded immediately, and any
+    /// buffered values are discarded.
+    ///
+    /// ```text
+    /// // `closing_notifier` as an observable
+    /// source.buffer(notifier_observable);
+    ///
+    /// // `closing_notifier` as a callback that returns an observable
+    /// source.buffer(|| NotifierObservable::new());
+    /// ```
+    fn buffer<U, N>(mut self, closing_notifier: N) -> Observable<Vec<T>>
+    where
+        Self: Sized + Send + Sync + 'static,
+        N: Notifier<Item = U>,
+        T: Send,
+        U: 'static,
+    {
+        enum Signal {
+            Idle,
+            Notified,
+            Complete,
+            Done,
+        }
+
+        let subject = self.is_subject();
+        let (fused, defused) = self.get_fused();
+
+        let mut notifier_observable = closing_notifier.into_observable();
+        let mut observable = Observable::new(move |o| {
+            let fused = o.fused;
+            let defused = o.defused;
+            let take_wrapped = o.take_wrapped;
+
+            arc_mutex_clone!(Signal::Idle => signal,
+                @signal_cl_c, @signal_cl_e, @signal_cl_n, @signal_cl_cn, @signal_cl_en
+            );
+            arc_mutex_clone!(o => o_shared, @o_cloned_c, @o_cloned_cn, @o_cloned_e, @o_cloned_en);
+
+            let notifier_observer = Subscriber::new(
+                move |_: U| {
+                    let mut signal = signal_cl_n.lock().unwrap();
+                    if let Signal::Complete | Signal::Done = *signal {
+                        return;
+                    }
+                    *signal = Signal::Notified;
+                },
+                move |notifier_observable_error| {
+                    *signal_cl_en.lock().unwrap() = Signal::Done;
+                    o_cloned_en.lock().unwrap().error(notifier_observable_error);
+                },
+                move || {
+                    let mut signal = signal_cl_cn.lock().unwrap();
+                    if let Signal::Complete | Signal::Done = *signal {
+                        return;
+                    }
+                    *signal = Signal::Complete;
+                    o_cloned_cn.lock().unwrap().complete();
+                },
+            );
+            let notifier_unsubscriber = Arc::new(Mutex::new(Some(
+                notifier_observable.subscribe(notifier_observer),
+            )));
+            let notifier_unsubscriber_cl = Arc::clone(&notifier_unsubscriber);
+
+            arc_mutex_clone!(Vec::with_capacity(10) => buf, @buf_cl);
+
+            let mut u = Subscriber::new(
+                move |v| {
+                    let mut signal = signal.lock().unwrap();
+                    let mut buf = buf.lock().unwrap();
+                    match *signal {
+                        Signal::Idle => buf.push(v),
+                        ref s @ (Signal::Notified | Signal::Complete) => {
+                            buf.push(v);
+                            let mut buf_temp = Vec::with_capacity(buf.len());
+                            buf_temp.append(&mut buf);
+                            o_shared.lock().unwrap().next(buf_temp);
+                            match s {
+                                Signal::Notified => *signal = Signal::Idle,
+                                Signal::Complete => *signal = Signal::Done,
+                                _ => {}
+                            }
+                        }
+                        Signal::Done => (),
+                    }
+                },
+                move |observable_error| {
+                    if let Some(unsubscriber) = notifier_unsubscriber_cl.lock().unwrap().take() {
+                        unsubscriber.unsubscribe();
+                    };
+                    *signal_cl_e.lock().unwrap() = Signal::Done;
+                    o_cloned_e.lock().unwrap().error(observable_error);
+                },
+                move || {
+                    let mut signal = signal_cl_c.lock().unwrap();
+                    if let Some(unsubscriber) = notifier_unsubscriber.lock().unwrap().take() {
+                        unsubscriber.unsubscribe();
+                    };
+                    // Check if the notifier is done.
+                    if let Signal::Done = *signal {
+                        return;
+                    }
+                    *signal = Signal::Complete;
+                    let mut buf = buf_cl.lock().unwrap();
+                    let mut buf_temp = Vec::with_capacity(buf.len());
+                    buf_temp.append(&mut buf);
+                    o_cloned_c.lock().unwrap().next(buf_temp);
+                    o_cloned_c.lock().unwrap().complete();
+                },
+            );
+            u.take_wrapped = take_wrapped;
+            self.set_fused(fused, defused);
+            self.subscribe(u)
+        });
+        observable.set_subject_indicator(subject);
+        observable.set_fused(fused, defused);
+        observable
+    }
+
     /// Emits items from the source observable only after a specified duration has
     /// passed without another emission.
     ///
@@ -956,7 +1126,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
     {
         let subject = self.is_subject();
         let (fused, defused) = self.get_fused();
-        // let acc = Arc::new(Mutex::new(acc));
 
         let mut observable = Observable::new(move |o| {
             let state = Arc::new(Mutex::new(seed.clone()));
@@ -968,7 +1137,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let o_cloned_e = Arc::clone(&o_shared);
             let o_cloned_c = Arc::clone(&o_shared);
             let state_cl = Arc::clone(&state);
-            // let acc_cl = Arc::clone(&acc);
 
             let mut u = Subscriber::new(
                 move |v: T| {
@@ -1357,9 +1525,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let mut signal_sent = false;
 
             // Alternative implementation for Subject's if desired behavior is to
-            // skip call to unsubscribe() when take() operator is used. This might be
-            // used for performance reasons because opening a channel and spawning a
-            // new thread can be skipped when this operator is used on Subject's.
+            // skip call to `unsubscribe()` when `take()` operator is used. This might
+            // be used for performance reasons because opening a channel and spawning
+            // a new thread can be skipped when this operator is used on Subject's.
             if self.is_subject() {
                 signal_sent = true;
             }
@@ -1459,9 +1627,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             }
 
             // Alternative implementation for Subject's if desired behavior is to
-            // skip call to unsubscribe() when take() operator is used. This might be
-            // used for performance reasons because opening a channel and spawning a
-            // new thread can be skipped when this operator is used on Subject's.
+            // skip call to `unsubscribe()` when `take()` operator is used. This might
+            // be used for performance reasons because opening a channel and spawning
+            // a new thread can be skipped when this operator is used on Subject's.
             if self.is_subject() {
                 signal_sent = true;
             }
@@ -1532,9 +1700,9 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
             let mut signal_sent = false;
 
             // Alternative implementation for Subject's if desired behavior is to
-            // skip call to unsubscribe() when take() operator is used. This might be
-            // used for performance reasons because opening a channel and spawning a
-            // new thread can be skipped when this operator is used on Subject's.
+            // skip call to `unsubscribe()` when `take()` operator is used. This might
+            // be used for performance reasons because opening a channel and spawning
+            // a new thread can be skipped when this operator is used on Subject's.
             if self.is_subject() {
                 signal_sent = true;
             }
@@ -2258,15 +2426,6 @@ pub trait ObservableExt<T: 'static>: Subscribeable<ObsType = T> {
 
                     // Check if previous subscription completed.
                     let is_previous_subscription_active = *as_cloned.lock().unwrap();
-
-                    // if hn {
-                    //     println!("TRY TO SEND ??????????????????????????????");
-                    //     return;
-                    // }
-                    // else {
-                    //     println!("SENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    //     *as_cloned.lock().unwrap() = true;
-                    // }
 
                     let o_shared = Arc::clone(&o_shared);
                     let o_cloned_e = Arc::clone(&o_shared);
